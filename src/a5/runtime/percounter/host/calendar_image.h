@@ -130,7 +130,7 @@ inline bool decode_template(
     if (plan.bytes.size() < sizeof(result.header)) return false;
     std::memcpy(&result.header, plan.bytes.data(), sizeof(result.header));
     const auto &header = result.header;
-    if (header.worker_count != clusters * 3 || header.row_count == 0 ||
+    if (header.worker_count != clusters * calendar_detail::lane_count || header.row_count == 0 ||
         !calendar_detail::read_table(plan, header.index_offset, header.worker_count + 1, &result.indexes) ||
         !calendar_detail::read_table(plan, header.row_offset, header.row_count, &result.rows) ||
         !calendar_detail::read_table(plan, header.join_offset, header.join_count, &result.joins))
@@ -170,7 +170,7 @@ inline bool decode_template(
         const uint32_t begin = result.indexes[worker];
         const uint32_t end = result.indexes[worker + 1];
         if (begin > end || end > header.row_count) return false;
-        const uint32_t lane = worker < clusters ? 0 : 1 + (worker - clusters) % 2;
+        const uint32_t lane = calendar_detail::worker_lane(clusters, worker);
         for (uint32_t i = begin; i < end; ++i) {
             const auto &row = result.rows[i];
             const uint32_t task = static_cast<uint32_t>(percounter_order_task_id(row.entry));
@@ -307,7 +307,7 @@ inline bool build_range_calendar(
     const uint32_t patch_offset = graphs.invocation_count == 0 ? 0 : image.allocate<CalendarDispatchPatch>(total_tasks);
     if (graphs.invocation_count != 0 && patch_offset == 0) return false;
 
-    const uint32_t workers = clusters * 3;
+    const uint32_t workers = clusters * calendar_detail::lane_count;
     std::vector<std::vector<RangeRecord>> ranges(workers);
     std::map<const CalendarPlan *, Template> templates;
     uint32_t sequence_base = 0;
@@ -523,8 +523,14 @@ inline bool build_range_calendar(
     return true;
 }
 
+inline uint64_t calendar_counter_add_command(uint64_t address) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM)
+        return address % alignof(CalendarGmCounter) == 0 ? address : 0;
+    return a5_cnt_notify_increment_address(address);
+}
+
 inline uint64_t range_add_command(const PercounterCounter &counter) {
-    return a5_cnt_notify_increment_address(counter.completion_notify_address);
+    return calendar_counter_add_command(counter.completion_notify_address);
 }
 
 inline CalendarWait range_completion_wait(const PercounterCounter &counter, uint32_t task) {
@@ -545,7 +551,7 @@ inline bool bind_range_calendar(
     if (image.completion.tasks.size() != layout.task_count || notifications.size() != header.notify_slots_count)
         return false;
     for (size_t i = 0; i < notifications.size(); ++i) {
-        if (a5_cnt_notify_increment_address(notifications[i]) == 0) return false;
+        if (calendar_counter_add_command(notifications[i]) == 0) return false;
         image.store(header.notify_slots_offset + static_cast<uint32_t>(i * sizeof(uint64_t)), notifications[i]);
     }
     auto *counters = region_at<PercounterCounter>(host, layout.counters_offset);
@@ -604,7 +610,7 @@ inline bool bind_range_calendar(
         } else if (end.slot != UINT32_MAX) {
             const uint64_t set = notifications[first_phase_slot + end.slot];
             phase_waits[phase] = {set | CALENDAR_WAIT_NOTIFY, end.contributors};
-            phase_add[phase] = a5_cnt_notify_increment_address(set);
+            phase_add[phase] = calendar_counter_add_command(set);
         }
     }
     for (const auto &patch : image.waits) {

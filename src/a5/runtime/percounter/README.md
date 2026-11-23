@@ -1,4 +1,4 @@
-# A5 calendar scheduler
+# Percounter Calendar scheduler
 
 The Host places each kernel block and role on an AICore and uploads a calendar
 for each physical lane. A lane executes its rows in order. Ordinary tasks and
@@ -11,8 +11,8 @@ outer DAG by dependency and uses a separate range for each Graph body.
 | ------- | ----------------------- |
 | GM | Per-lane range indexes, calendar rows, bound kernel entries and arguments, and dependency descriptors. AICPU materializes a Graph's arguments and publishes a prefix watermark after flushing the bindings. |
 | SSBUF | Per-cluster rendezvous tokens for MIX roles and eligible blocks of the same consumer, and the block context read by each kernel. |
-| CntNotify SRAM | Run-wide START and EXIT, logical DONE counts, defer indicators, and range tail arrivals. |
-| SPR | Each core acknowledges quiescence through its own COND nonce. |
+| Calendar counters | Run-wide START and EXIT, logical DONE counts, defer indicators, and range tail arrivals. A5 uses CntNotify SRAM. A6 uses aligned GM words. |
+| Registers | Each core echoes its retirement nonce through A5 COND or A6 IPC4. |
 
 Several invocations can share the placement of a Graph body. Each invocation
 has its own argument bindings and completion targets. A lane waits for the
@@ -41,9 +41,9 @@ within that invocation. A deferred wait must never depend on a later Graph
 invocation making progress. Express dependencies between Graph invocations as
 explicit DAG edges.
 
-## CntNotify capacity
+## Counter storage and lifecycle
 
-The Host requires a complete CntNotify lease for DONE, range tail and
+On A5, the Host requires a complete CntNotify lease for DONE, range tail and
 fan-in counters. Quota exhaustion fails bind before launch. This makes the
 counter demand visible at the point of failure so it can be investigated.
 The `complete CntNotify lease required` error reports `requested`, `received`
@@ -51,31 +51,34 @@ and `status`. Check the requested slot count and the SDK allocation error in
 the preceding `scheduler notification acquire failed` message when diagnosing
 quota exhaustion. The AICPU clears the calendar counters before it releases the lanes.
 
-One additional CntNotify SET slot carries START and EXIT for all workers in the
-run. Each lane samples its previous value before publishing its startup report.
+On A6, the Host places zero-initialized 64-bit counters on separate aligned
+GM cache lines. Lanes use GM atomics for completion credits and sticky defer
+bits. Each A6 cluster offers one Cube lane and one Vector lane.
+
+One additional counter carries START and EXIT for all workers in the run.
+Each lane samples its previous value before publishing its startup report.
 After discovery and calendar initialization, the AICPU leader publishes the next
-even generation with a direct store to SET. The AICPU publishes EXIT to the
+even generation to the lifecycle counter. The AICPU publishes EXIT to the
 same address with the low bit set. If discovery fails, it first records that
 EXIT generation for each worker without a validated register window. The Host
 upload clears these per-worker slots before launch. A late worker that first
 samples the current EXIT can acknowledge its matching slot and return. The
 run still reports incomplete retirement for those missing windows.
-The lease outlives every worker using it. Retirement still requires each
-discovered core to echo its fresh COND nonce before the AICPU releases that core.
-The calendar leaves DATA_MAIN_BASE available during startup, execution and teardown.
+The lifecycle counter outlives every worker using it. The AICPU releases each
+discovered core after the core echoes its fresh retirement nonce. The Calendar
+leaves the dispatch register available during startup, execution and teardown.
 
 ## Completion and defer
 
-One CntNotify word holds a 24-bit completion count and up to eight sticky defer
+One counter word holds a 24-bit completion count and up to eight sticky defer
 bits. Tasks can share the count when the Host can prove their completions advance
 in order. Each executable task has its own defer bit within the slot.
 
 1. After the output barrier, an execution with no registered signal issues a
-   DONE ADD in CntNotify SRAM. The scheduler can take this path after observing
+   DONE ADD. The scheduler can take this path after observing
    that a single monotonic counter wait is already satisfied. A pending
-   deferred execution publishes one record in GM and sets its task's defer bit
-   in CntNotify SRAM.
-2. A successor reads the DONE word in SRAM. It checks the count first. If the
+   deferred execution publishes one record in GM and sets its task's defer bit.
+2. A successor reads the DONE word and checks the count first. If the
    count is short and the task's defer bit is set, it visits the task's
    registration records in GM and can claim any unowned record with a CAS.
 3. The owner alone polls the signals in that record. Once all of them are
@@ -98,7 +101,7 @@ For an independent multi-block consumer with multiple predecessors, the Host
 can assign the dependency checks to distinct consumer lanes. Each assigned lane
 must be able to reach the consumer's wait without relying on other consumer rows
 to execute. A lane with multiple assignments visits its pending predecessors
-in turn. Each completed predecessor contributes once to a shared CntNotify
+in turn. Each completed predecessor contributes once to a shared Calendar
 counter. The rest of the consumer lanes only wait for that counter. MIX and
 synchronized SPMD retain their per-block entry protocol and dependency checks.
 
@@ -113,7 +116,7 @@ independent producers that have one common remaining consumer. Each producer
 keeps its own defer bit and a lane that can service its registrations. The
 consumer waits for the combined count. Wide groups use a bounded,
 cluster-dependent interval between unsuccessful reads to reduce contention
-when many lanes poll the same CntNotify counter. A helper checks promptly when
+when many lanes poll the same counter. A helper checks promptly when
 at most two credits remain or its producer has published a defer bit.
 The Host proves fusion eligibility while planning and reuses the result on
 cache hits. The independence check has a phase-wide edge budget. Groups

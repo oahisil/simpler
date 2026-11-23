@@ -97,6 +97,7 @@ static_assert(
 
 // The CntNotify ADD alias is eight bytes above SET.
 inline __aicore__ uint64_t percounter_notify_add_address(uint64_t read_address) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) return read_address;
     return read_address == 0 ? 0 : read_address + 8;
 }
 

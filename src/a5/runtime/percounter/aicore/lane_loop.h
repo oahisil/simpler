@@ -423,7 +423,7 @@ inline __aicore__ AicoreWorkWindow run_percounter_lane(
 // retirement still fails because this worker has no verified physical window.
 inline __aicore__ bool percounter_ack_rejected_exit(__gm__ uint32_t &request, uint32_t signal) {
     if ((signal & AICORE_LIFECYCLE_EXIT_BIT) == 0) return false;
-    percounter_memory_barrier();  // Order the CntNotify observation before reading the published GM request.
+    percounter_memory_barrier();  // Order the lifecycle observation before reading the published GM request.
     if (percounter_gm_read(request) != signal) return false;
     percounter_gm_store(request, uint32_t{0});
     percounter_memory_barrier();
@@ -480,8 +480,7 @@ inline __aicore__ void percounter_aicore_execute(__gm__ Runtime *runtime, int bl
 
     auto *lifecycle =
         reinterpret_cast<__gm__ volatile uint32_t *>(runtime->dev.scheduler_bootstrap.lifecycle_notify_address);
-    // The Host rejects an incomplete lease before launch. A malformed
-    // bootstrap cannot publish a report for a gate this lane cannot observe.
+    // A worker can report startup once it has a bound lifecycle gate.
     if (lifecycle == nullptr) return;
     const uint32_t previous = percounter_notify_query(*lifecycle);
     percounter_memory_barrier();  // Complete the sample before discovery can authorize START or EXIT.

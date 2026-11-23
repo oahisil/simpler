@@ -57,6 +57,12 @@ CoreType subtask_core_type(uint8_t subtask) { return subtask == 0 ? CoreType::AI
 
 void publish_lifecycle_word(volatile uint32_t *word, uint32_t value) {
     wmb();
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        auto *gm = reinterpret_cast<uint64_t *>(const_cast<uint32_t *>(word));
+        __atomic_store_n(gm, static_cast<uint64_t>(value), __ATOMIC_RELEASE);
+        cache_flush_range(gm, sizeof(*gm));
+        return;
+    }
     __atomic_store_n(word, value, __ATOMIC_RELEASE);
     // Drain the posted SET on the same register before a different partition
     // can issue EXIT, or the completed run can release its lease for reuse.
@@ -104,7 +110,14 @@ int32_t AicoreLifecycle::pre_handshake_init(Runtime *runtime, int32_t aicpu_thre
         reinterpret_cast<volatile uint32_t *>(runtime->dev.scheduler_bootstrap.lifecycle_notify_address);
     rejected_exit_ = reinterpret_cast<uint32_t *>(runtime->dev.scheduler_bootstrap.rejected_exit_address);
     if (lifecycle_notify_ != nullptr) {
-        const uint32_t prior = __atomic_load_n(lifecycle_notify_, __ATOMIC_RELAXED);
+        uint32_t prior;
+        if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+            const auto *gm = reinterpret_cast<const uint64_t *>(const_cast<const uint32_t *>(lifecycle_notify_));
+            cache_invalidate_range(gm, sizeof(*gm));
+            prior = static_cast<uint32_t>(__atomic_load_n(gm, __ATOMIC_ACQUIRE));
+        } else {
+            prior = __atomic_load_n(lifecycle_notify_, __ATOMIC_RELAXED);
+        }
         lifecycle_start_ = (prior + 2U) & ~AICORE_LIFECYCLE_EXIT_BIT;
     }
     // The descriptor's gate tail is device-owned and is not copied from the host.
@@ -344,8 +357,9 @@ int32_t AicoreLifecycle::post_handshake_init(Runtime *runtime) {
         }
         cluster_workers[cluster][lane] = worker;
     }
-    static_assert(PLATFORM_CORES_PER_BLOCKDIM == 3, "Scheduler selection assumes one AIC and two AIV lanes");
-    static_assert(PLATFORM_AIV_CORES_PER_BLOCKDIM == 2, "Scheduler selection assumes two AIV lanes per cluster");
+    static_assert(
+        PLATFORM_CORES_PER_BLOCKDIM == 1 + PLATFORM_AIV_CORES_PER_BLOCKDIM, "Clusters must have one AIC lane"
+    );
     for (int32_t cluster = 0; cluster < aic_count; ++cluster) {
         for (int32_t lane = 0; lane < PLATFORM_CORES_PER_BLOCKDIM; ++lane) {
             if (cluster_workers[cluster][lane] < 0) {

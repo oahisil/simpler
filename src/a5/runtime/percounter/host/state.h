@@ -378,10 +378,17 @@ inline StateSelection select_percounter_state(
         return StateSelection::FAILED;
     }
     constexpr uint64_t alignment = 128;
+    const auto calendar_header = calendar.load<CalendarRangeHeader>(0);
+    // The final slot holds the run-wide START/EXIT generation.
+    const size_t requested = static_cast<size_t>(calendar_header.notify_slots_count) + 1;
+    uint32_t gm_slots = 0;
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        gm_slots = calendar.allocate<CalendarGmCounter>(requested);
+        if (gm_slots == 0) return StateSelection::FAILED;
+    }
     if (layout.total_size > SIZE_MAX - alignment - calendar.bytes.size()) return StateSelection::FAILED;
     const uint64_t calendar_offset = (layout.total_size + alignment - 1) & ~(alignment - 1);
     const uint64_t allocation_size = calendar_offset + calendar.bytes.size();
-    const auto calendar_header = calendar.load<CalendarRangeHeader>(0);
     void *device_state = nullptr;
     void *host_base = nullptr;
     if (api->acquire_scheduler_state_storage(
@@ -394,18 +401,24 @@ inline StateSelection select_percounter_state(
     const uint64_t device_base = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(device_state));
 
     SchedulerDoneNotifications notifications{};
-    // The last SET slot is a run-wide lifecycle word. Keep it out of the
-    // calendar slot table: lanes sample the previous generation before discovery.
-    const size_t requested = static_cast<size_t>(calendar_header.notify_slots_count) + 1;
-    const int lease_rc =
-        api->acquire_scheduler_notifications(SchedulerNotificationPurpose::CALENDAR_COUNTER, requested, &notifications);
-    if (lease_rc != 0 || notifications.addresses.size() != requested || notifications.owner == nullptr ||
-        a5_cnt_notify_increment_address(notifications.addresses.back()) == 0) {
-        LOG_ERROR(
-            "A5 calendar: complete CntNotify lease required (requested=%zu, received=%zu, status=%d)", requested,
-            notifications.addresses.size(), lease_rc
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        const uint64_t first = device_base + calendar_offset + gm_slots;
+        notifications.addresses.reserve(requested);
+        for (size_t i = 0; i < requested; ++i)
+            notifications.addresses.push_back(first + i * sizeof(CalendarGmCounter));
+        if (calendar_counter_add_command(first) == 0) return StateSelection::FAILED;
+    } else {
+        const int lease_rc = api->acquire_scheduler_notifications(
+            SchedulerNotificationPurpose::CALENDAR_COUNTER, requested, &notifications
         );
-        return StateSelection::FAILED;
+        if (lease_rc != 0 || notifications.addresses.size() != requested || notifications.owner == nullptr ||
+            calendar_counter_add_command(notifications.addresses.back()) == 0) {
+            LOG_ERROR(
+                "A5 calendar: complete CntNotify lease required (requested=%zu, received=%zu, status=%d)", requested,
+                notifications.addresses.size(), lease_rc
+            );
+            return StateSelection::FAILED;
+        }
     }
     const uint64_t lifecycle_notify = notifications.addresses.back();
     notifications.addresses.pop_back();

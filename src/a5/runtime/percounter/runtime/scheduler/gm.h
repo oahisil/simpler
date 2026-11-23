@@ -144,15 +144,20 @@ static inline __aicore__ uint64_t percounter_gm_read_immutable_word(const __gm__
     );
 }
 
+static inline __aicore__ uint64_t
+percounter_gm_fetch_add(__gm__ volatile uint64_t &value, uint64_t delta, int order = __ATOMIC_ACQ_REL);
+
 /**
  * A STARS CntNotify slot is 32 bytes: the 32-bit SET register doubles as the
  * read address, and the ADD alias sits at SET + 8. Reads are non-consuming, so
  * several observers see the same value. Neither access may be widened into a
  * neighbouring register, and the mapping never takes cache maintenance.
  *
- * These commands access CntNotify SRAM through device MMIO.
+ * Calendar platforms without CntNotify use a 64-bit atomic GM word.
  */
 static inline __aicore__ uint32_t percounter_notify_query(__gm__ volatile uint32_t &value) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM)
+        return static_cast<uint32_t>(percounter_gm_fetch_add(*reinterpret_cast<__gm__ volatile uint64_t *>(&value), 0));
     return simpler::percounter::percounter_scalar_notify_read(
         reinterpret_cast<uint64_t>(&value), [&value]() __aicore__ {
 #if defined(__CCE_AICORE__)
@@ -164,8 +169,12 @@ static inline __aicore__ uint32_t percounter_notify_query(__gm__ volatile uint32
     );
 }
 
-/** Command one increments once: a payload of two does not add two. */
+/** The CntNotify ADD alias issues one command per credit. */
 static inline __aicore__ void percounter_notify_add(__gm__ volatile uint32_t &value, uint32_t credits) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        (void)percounter_gm_fetch_add(*reinterpret_cast<__gm__ volatile uint64_t *>(&value), credits);
+        return;
+    }
     for (uint32_t credit = 0; credit < credits; ++credit) {
         simpler::percounter::percounter_scalar_notify_issue(
             simpler::percounter::ProfilePhase::CntNotifyAddIssue, reinterpret_cast<uint64_t>(&value), 1,
@@ -225,7 +234,7 @@ percounter_gm_store(__gm__ volatile uint32_t &value, uint32_t desired, int order
 
 /** Adding zero reads a word without leaving it changed, and does not lag. */
 static inline __aicore__ uint64_t
-percounter_gm_fetch_add(__gm__ volatile uint64_t &value, uint64_t delta, int order = __ATOMIC_ACQ_REL) {
+percounter_gm_fetch_add(__gm__ volatile uint64_t &value, uint64_t delta, int order) {
     return simpler::percounter::percounter_scalar_memory_result(
         simpler::percounter::ProfilePhase::AtomicFetchAdd, [=, &value]() __aicore__ {
 #if defined(__CCE_AICORE__)

@@ -89,6 +89,16 @@ inline __aicore__ void percounter_calendar_add(uint64_t address) {
 }
 
 inline __aicore__ void percounter_calendar_set_defer_bit(uint64_t address, uint32_t bit) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        auto &word = *reinterpret_cast<__gm__ volatile uint64_t *>(address);
+        auto observed = percounter_gm_fetch_add(word, 0);
+        while ((observed & bit) == 0) {
+            const auto previous = percounter_gm_compare_exchange(word, observed, observed | bit);
+            if (previous == observed) return;
+            observed = previous;
+        }
+        return;
+    }
     percounter_scalar_notify_issue(ProfilePhase::CntNotifyDeferIssue, address, bit, [=]() __aicore__ {
 #if defined(__CCE_AICORE__)
         __builtin_cce_st_dev(bit, reinterpret_cast<__gm__ uint32_t *>(address + 16), 0);

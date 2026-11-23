@@ -57,3 +57,24 @@ simpler_ut_add_target(NAME test_a5_percounter_calendar_phases
         ${SIMPLER_SRC}/a5/runtime/host_build_graph/common
         ${SIMPLER_SRC}/common/host_build_graph
     LABEL no_hardware TIMEOUT 20)
+
+simpler_ut_add_target(NAME test_a6_percounter_calendar
+    SOURCES test_a6_calendar.cpp
+    ARCH a5 RUNTIME percounter
+    INCLUDES_BEFORE ${SIMPLER_SRC}/a6/platform/include
+    INCLUDES
+        ${SIMPLER_SRC}/a5/runtime/percounter
+        ${SIMPLER_SRC}/a5/runtime/percounter/runtime
+        ${SIMPLER_SRC}/a5/runtime/percounter/aicore
+        ${SIMPLER_SRC}/a5/runtime/host_build_graph/runtime
+        ${SIMPLER_SRC}/a5/runtime/host_build_graph/common
+        ${SIMPLER_SRC}/common/host_build_graph
+        ${SIMPLER_SRC}/a5/platform/sim/aicore
+    DEFINES __CPU_SIM SIMPLER_PLATFORM_NAME="a6"
+    LABEL no_hardware TIMEOUT 20)
+
+simpler_ut_add_target(NAME test_a6_percounter_ipc_registers
+    SOURCES test_a6_ipc_registers.cpp ${SIMPLER_SRC}/a5/platform/onboard/aicpu/inner_platform_regs.cpp
+    ARCH a5 RUNTIME percounter
+    INCLUDES_BEFORE ${SIMPLER_SRC}/a6/platform/include
+    LABEL no_hardware TIMEOUT 20)

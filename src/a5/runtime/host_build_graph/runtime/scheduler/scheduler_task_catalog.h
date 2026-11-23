@@ -36,7 +36,7 @@ struct SchedulerTaskCatalogOrder {
     uint32_t next_mix_ref{UINT32_MAX};
     uint32_t requires_peer_order{0};
 };
-static_assert(sizeof(SchedulerTaskCatalogOrder) == 28);
+static_assert(sizeof(SchedulerTaskCatalogOrder) == (4 + PLATFORM_CORES_PER_BLOCKDIM) * sizeof(uint32_t));
 static_assert(
     std::is_standard_layout_v<SchedulerTaskCatalogOrder> && std::is_trivially_copyable_v<SchedulerTaskCatalogOrder>
 );

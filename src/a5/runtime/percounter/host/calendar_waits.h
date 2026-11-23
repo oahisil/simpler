@@ -471,7 +471,7 @@ inline bool plan_calendar_waits(
     // Calendar workers are the AIC lanes followed by adjacent pairs of AIV
     // lanes. A second block of the same ordinary task can acquire the first
     // block's DONE or fan-in observation through the cluster's release token.
-    if (worker_count % PLATFORM_CORES_PER_BLOCKDIM != 0) return true;
+    if (PLATFORM_AIV_CORES_PER_BLOCKDIM != 2 || worker_count % PLATFORM_CORES_PER_BLOCKDIM != 0) return true;
     const size_t cluster_count = worker_count / PLATFORM_CORES_PER_BLOCKDIM;
     std::vector<uint32_t> first_lane_row(task_count, CALENDAR_NO_INPUT_OWNER);
     const auto candidate = [&](size_t row) {
