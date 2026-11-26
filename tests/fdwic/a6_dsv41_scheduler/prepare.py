@@ -299,9 +299,6 @@ def build_bundle(args, build_dir, bundle, source):
 
 
 def assemble_replay(tools, bundle, build_dir, binary_dir, compiled, kernels, metadata):
-    sys.path[:0] = [str(REPO), str(REPO / "python"), str(SUITE / "production")]
-    from build_sources import capability_words  # noqa: PLC0415
-
     def signature(values):
         return f"{len(values)} " + " ".join(map(str, values))
 
@@ -310,8 +307,6 @@ def assemble_replay(tools, bundle, build_dir, binary_dir, compiled, kernels, met
         rows.append(
             f"{kernel['func_id']} {signature(kernel['signature'])} "
             + json.dumps(str(binary_dir / record.get("registration_file", record["file"])), ensure_ascii=False)
-            + " "
-            + " ".join(map(str, capability_words(kernel)))
         )
     assembly = build_dir / "assembly.txt"
     assembly.write_text("\n".join(rows) + "\n")
