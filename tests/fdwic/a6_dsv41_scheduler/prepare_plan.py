@@ -27,7 +27,7 @@ def read_records(tool, path):
     return json.loads(subprocess.check_output([str(tool), "--records-json", str(path)], text=True))
 
 
-def check_conversion(before, after):
+def check_conversion(before, after, eight_pairs):
     expected = copy.deepcopy(before)
     changed = []
     for record in expected:
@@ -35,9 +35,11 @@ def check_conversion(before, after):
             record["kernels"][2] = -1
             if record["id"] == 22:
                 record["blocks"] *= 2
+                if eight_pairs:
+                    record["sync"] = 0
             changed.append(record["id"])
     if changed != [22, 28] or after != expected:
-        raise ValueError("A6 conversion must only change t22/t28 lane masks and t22 block count")
+        raise ValueError("A6 conversion changed fields outside the selected t22/t28 launch descriptions")
     tasks = [r for r in after if r["op"] == 2 and 8 <= r["id"] <= 35]
     executions = sum(r["blocks"] * sum(k >= 0 for k in r["kernels"]) for r in tasks)
     if len(tasks) != 16 or executions != 570:
@@ -49,6 +51,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cxx", default="g++", help="Host C++ compiler executable, not the AICPU cross compiler")
+    parser.add_argument("--8c8v", dest="eight_pairs", action="store_true", help="Allow t22 to run in waves")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -75,9 +78,12 @@ def main():
     golden = json.loads((FIXTURE / "plan-semantics.json").read_text())
     if len(before) != golden["records"] or semantic_hash(before) != golden["semantic_sha256"]:
         raise ValueError("Host ABI decoded the fixture differently; do not run or convert this capture")
-    subprocess.run([str(tools / "adapt-plan"), str(original), str(converted)], check=True)
+    convert = [str(tools / "adapt-plan"), str(original), str(converted)]
+    if args.eight_pairs:
+        convert.append("--8c8v")
+    subprocess.run(convert, check=True)
     after = read_records(tools / "record-tool", converted)
-    executions = check_conversion(before, after)
+    executions = check_conversion(before, after, args.eight_pairs)
     # Keep the original capture intact; the A6 plan stays separately named.
     summary = {
         "runtime_executed": False,
@@ -89,7 +95,11 @@ def main():
         "a5_executions": 578,
         "a6_executions": executions,
         "changes": [
-            {"task": 22, "before": {"blocks": 24, "lanes": "C,V0,V1"}, "after": {"blocks": 48, "lanes": "C,V"}},
+            {
+                "task": 22,
+                "before": {"blocks": 24, "lanes": "C,V0,V1", "sync_start": True},
+                "after": {"blocks": 48, "lanes": "C,V", "sync_start": not args.eight_pairs},
+            },
             {"task": 28, "before": {"blocks": 32, "lanes": "C,V0,V1"}, "after": {"blocks": 32, "lanes": "C,V"}},
         ],
     }

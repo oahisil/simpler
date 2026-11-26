@@ -17,8 +17,11 @@
 
 int main(int argc, char **argv) {
     try {
-        const bool t25_trial = argc == 4 && std::string_view(argv[3]) == "--t25-54";
-        if (argc != 3 && !t25_trial) throw std::runtime_error("Usage: adapt-plan input-plan output-plan [--t25-54]");
+        const auto mode = argc == 4 ? std::string_view(argv[3]) : std::string_view{};
+        const bool t25_trial = mode == "--t25-54";
+        const bool eight_pairs = mode == "--8c8v";
+        if (argc != 3 && !t25_trial && !eight_pairs)
+            throw std::runtime_error("Usage: adapt-plan input-plan output-plan [--t25-54|--8c8v]");
         std::ifstream input(argv[1], std::ios::binary);
         auto records = dsv41::read_records(input);
         const auto slice = dsv41::select_slice(records, 8, 35);
@@ -44,7 +47,16 @@ int main(int argc, char **argv) {
                 throw std::runtime_error("Expected original SWA 1C2V task; refuse a modified or already adapted plan");
             }
             h.kernels[2] = -1;
-            if (attention) h.block_num *= 2;
+            if (attention) {
+                h.block_num *= 2;
+                if (eight_pairs) {
+                    const auto &scalars = records[i].scalars;
+                    // Balanced attention can wait for partial results from other blocks.
+                    if (h.sync_start != 1 || scalars.size() != 5 || scalars.back() != 0)
+                        throw std::runtime_error("8C+8V requires the unbalanced t22 attention capture");
+                    h.sync_start = 0;
+                }
+            }
             ++changed;
         }
         if (changed != (t25_trial ? 1 : 2)) throw std::runtime_error("Unexpected number of SWA plan edits");
@@ -62,8 +74,12 @@ int main(int argc, char **argv) {
         }
         output.close();
         if (!output) throw std::runtime_error("Failed to finish converted plan");
-        std::cout << (t25_trial ? "Converted t25 to 54 vector blocks\n" :
-                                 "Converted t22 to 48 x 1C1V and t28 to 32 x 1C1V\n");
+        if (t25_trial) {
+            std::cout << "Converted t25 to 54 vector blocks\n";
+        } else {
+            std::cout << "Converted t22 to 48 x 1C1V and t28 to 32 x 1C1V\n";
+            if (eight_pairs) std::cout << "Allow t22 to run in waves across 8 Cube/Vector pairs\n";
+        }
         return 0;
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

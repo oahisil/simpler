@@ -174,7 +174,9 @@ def prepare_bundle(bundle, tools, platform):
     if platform == "a6":
         with tempfile.TemporaryDirectory(prefix="swa-plan-", dir=bundle.parent) as temporary:
             plan_dir = Path(temporary) / "conversion"
-            subprocess.run([sys.executable, str(HERE / "prepare_plan.py"), "--output", str(plan_dir)], check=True)
+            subprocess.run(
+                [sys.executable, str(HERE / "prepare_plan.py"), "--output", str(plan_dir), "--8c8v"], check=True
+            )
             converted = plan_dir / "plan-a6-rank0.bin"
             conversion = json.loads((plan_dir / "summary.json").read_text())
             if digest(converted.read_bytes()) != conversion["a6_plan_sha256"]:

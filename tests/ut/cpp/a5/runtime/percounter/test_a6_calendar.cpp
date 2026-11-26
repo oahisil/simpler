@@ -47,6 +47,27 @@ TEST(A6Calendar, PlacesOneMixPairPerClusterAndRejectsAnOversizedVectorCohort) {
     EXPECT_FALSE(build_static_calendar(tasks, 2, {}, plan.get()));
 }
 
+TEST(A6Calendar, PlacesAllAttentionBlocksAcrossEightPairs) {
+    static_assert(PLATFORM_ONBOARD_LAUNCH_BLOCKDIM == 8);
+    std::vector<TaskInput> tasks(1);
+    auto &task = tasks.front();
+    task.active_mask = 3;
+    task.is_mix = true;
+    task.subtask_count = 2;
+    task.block_num = 48;
+    task.sync_start = true;
+    CalendarPlan plan;
+    EXPECT_FALSE(build_static_calendar(tasks, 8, {}, &plan));
+
+    task.sync_start = false;
+    ASSERT_TRUE(build_static_calendar(tasks, 8, {}, &plan));
+    CalendarHeader header{};
+    std::memcpy(&header, plan.bytes.data(), sizeof(header));
+    EXPECT_EQ(header.worker_count, 16U);
+    EXPECT_EQ(header.row_count, 96U);
+    EXPECT_EQ(header.join_count, 48U);
+}
+
 TEST(A6Calendar, BindsReadAndAddToTheSameAlignedWord) {
     static_assert(PLATFORM_CALENDAR_COUNTERS_IN_GM);
     CalendarGmCounter word{};
