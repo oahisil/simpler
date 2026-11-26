@@ -155,6 +155,22 @@ std::thread DeviceRunner::create_thread(std::function<void()> fn) {
     return thread;
 }
 
+int DeviceRunner::ensure_host_mapping_acl() {
+    std::lock_guard<std::mutex> lock(acl_init_mutex_);
+    if (!acl_init_ref_) {
+        constexpr int kAclRepeatInit = 100002;
+        const int rc = aclInit(nullptr);
+        if (rc != ACL_SUCCESS && rc != kAclRepeatInit) {
+            LOG_ERROR("aclInit failed: %d", rc);
+            ACL_LOG_ERROR_DETAIL(rc);
+            return rc;
+        }
+        // Both results acquire a process-wide ACL reference.
+        acl_init_ref_ = true;
+    }
+    return 0;
+}
+
 int DeviceRunner::ensure_acl_ready(int device_id) {
     std::lock_guard<std::mutex> lock(acl_init_mutex_);
     if (device_id < 0 || (device_id_ >= 0 && device_id_ != device_id)) return PTO_RUNTIME_ERR_INVALID_STATE;
