@@ -756,7 +756,8 @@ inline __aicore__ bool percounter_calendar_execute_range(
 inline __aicore__ void percounter_calendar_loop(const LaneConfig &cfg) {
     const uint64_t offset = cfg.control->calendar_offset;
     const uint64_t image_bytes = cfg.control->image_bytes;
-    if (cfg.aiv_per_cluster != 2 || offset < sizeof(PercounterControl) || offset % alignof(CalendarRangeHeader) != 0 ||
+    if (cfg.aiv_per_cluster != PLATFORM_AIV_CORES_PER_BLOCKDIM ||
+        offset < sizeof(PercounterControl) || offset % alignof(CalendarRangeHeader) != 0 ||
         offset > image_bytes || image_bytes - offset < sizeof(CalendarRangeHeader)) {
         percounter_fail(cfg, SchedulerGraphResult::INVALID_ARGUMENTS);
         return;
