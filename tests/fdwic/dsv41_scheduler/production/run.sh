@@ -36,7 +36,6 @@ mkdir -p "$3"
 output=$(realpath "$3")
 [[ ! -e "$output/rank0" && ! -e "$output/rank1" ]] || { echo 'Refusing to overwrite a run' >&2; exit 2; }
 if [[ -z "${TASK_DEVICE:-}" ]]; then
-    bash "$root/../../../.claude/skills/onboard-arch-precheck/check.sh" a5
     printf -v command 'TASK_DEVICE="$TASK_DEVICE" bash %q' "$root/production/run.sh"
     for argument in "$@"; do printf -v command '%s %q' "$command" "$argument"; done
     command -v task-submit >/dev/null || { echo 'task-submit is required to reserve devices' >&2; exit 2; }
@@ -50,6 +49,7 @@ for ((rank=0; rank<ranks; ++rank)); do
         [[ ${devices[$rank]} != "${devices[$peer]}" ]] || { echo 'Device IDs must be distinct' >&2; exit 2; }
     done
 done
+bash "$root/../../../.claude/skills/onboard-arch-precheck/check.sh" a5
 if [[ -f "$bundle/case.json" ]] && "${DSV41_PYTHON:-python3}" -c \
     'import json,sys; sys.exit(json.load(open(sys.argv[1])).get("execution") != "native_moe_host_control")' "$bundle/case.json"; then
     [[ -f "$bundle/callable.bin" ]] || { echo 'Prepare native MoE with production/moe.py first' >&2; exit 2; }

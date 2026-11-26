@@ -44,6 +44,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include "scheduler/scheduler_lifecycle_detail.h"
 #include <atomic>
 #include <cerrno>
 #include <sys/resource.h>
@@ -476,6 +477,7 @@ struct SchedulerStateOwner {
     const HostApi *api;
     std::vector<SchedulerProtocolTaskSpec> protocol_tasks;
     std::string protocol_source;
+    uint64_t lifecycle_detail_offset{0};
 };
 
 std::mutex scheduler_state_owners_mutex;
@@ -666,7 +668,23 @@ bool publish_aicore_scheduler_profiling(Runtime *runtime, const HostApi *api) {
                            << ", \"exit_signal_start_cycles\": " << trace.exit_signal_start_cycles
                            << ", \"exit_signal_end_cycles\": " << trace.exit_signal_end_cycles
                            << ", \"exit_wait_start_cycles\": " << trace.exit_wait_start_cycles
-                           << ", \"exit_wait_end_cycles\": " << trace.exit_wait_end_cycles << "}";
+                           << ", \"exit_wait_end_cycles\": " << trace.exit_wait_end_cycles;
+            if (owner.lifecycle_detail_offset != 0) {
+                const auto &detail =
+                    scheduler_state_at<AicpuLifecycleDetail>(host_base, owner.lifecycle_detail_offset)[thread];
+                lifecycle_json << ", \"detail_intervals\": [";
+                bool first_detail = true;
+                for (uint32_t phase = 0; phase < AICPU_LIFECYCLE_DETAIL_COUNT; ++phase) {
+                    if (detail.start_cycles[phase] == 0) continue;
+                    if (!first_detail) lifecycle_json << ",";
+                    lifecycle_json << "{\"name\":\"" << AICPU_LIFECYCLE_DETAIL_NAMES[phase]
+                                   << "\",\"start_cycles\":" << detail.start_cycles[phase]
+                                   << ",\"end_cycles\":" << detail.end_cycles[phase] << "}";
+                    first_detail = false;
+                }
+                lifecycle_json << "]";
+            }
+            lifecycle_json << "}";
             first = false;
         }
         if (!first) lifecycle_json << "\n  ";
@@ -1285,7 +1303,8 @@ bool prepare_scheduler_calls(
 ) {
     if (layout.prepared_layout_offset == 0) return true;
     const char *platform = get_platform();
-    if (std::strcmp(platform, "a5") != 0 && std::strcmp(platform, "a5sim") != 0) return false;
+    if (std::strcmp(platform, "a5") != 0 && std::strcmp(platform, "a6") != 0 && std::strcmp(platform, "a5sim") != 0)
+        return false;
     const auto address_space = std::strcmp(platform, "a5sim") == 0 ? SchedulerCallableAddressSpace::HOST :
                                                                      SchedulerCallableAddressSpace::DEVICE;
     const uint64_t host_image = reinterpret_cast<uint64_t>(uploaded_sm);
@@ -1733,8 +1752,13 @@ bool create_scheduler_state(
         mix_task_count,
         sync_mix_task_count,
     };
-    for (auto &metadata : task_metadata)
+    for (auto &metadata : task_metadata) {
+        if (metadata.active_mask.is_mix() && !scheduler_cluster_lanes().contains(metadata.active_mask)) {
+            LOG_ERROR("HBG: MIX mask %u requires a lane outside the physical cluster", metadata.active_mask.raw());
+            return false;
+        }
         if (scheduler_is_exact_owner_wave(metadata, spmd.cluster_count)) metadata.flags |= SCHEDULER_TASK_FIXED_OWNER;
+    }
     const bool protocol_profiling = api->chip_swimlane_level() >= static_cast<uint32_t>(ChipSwimlaneLevel::ORCH_PHASES);
     std::vector<SchedulerProtocolTaskSpec> protocol_tasks;
     std::string protocol_source;
@@ -1776,6 +1800,18 @@ bool create_scheduler_state(
               layout.total_size, pto2::resident::ASYNC_RECORD_ALIGNMENT, &layout.total_size
           )))) {
         LOG_ERROR("A5 HBG: task argument diagnostic image overflow");
+        return false;
+    }
+
+    uint64_t lifecycle_detail_offset = 0;
+    const char *lifecycle_detail = std::getenv("SIMPLER_HBG_AICPU_DETAIL_ENABLE");
+    if (runtime->dev.chip_swimlane_level >= static_cast<uint32_t>(ChipSwimlaneLevel::SCHEDULE_TIMING) &&
+        lifecycle_detail != nullptr && std::strcmp(lifecycle_detail, "1") == 0 &&
+        !scheduler_layout_reserve(
+            &layout.total_size, sizeof(AicpuLifecycleDetail) * PLATFORM_MAX_AICPU_THREADS,
+            alignof(AicpuLifecycleDetail), &lifecycle_detail_offset
+        )) {
+        LOG_ERROR("A5 HBG: AICPU lifecycle detail layout overflow");
         return false;
     }
 
@@ -1842,6 +1878,13 @@ bool create_scheduler_state(
         return false;
     }
 
+    if (lifecycle_detail_offset != 0) {
+        auto *lifecycle =
+            scheduler_state_at<AicpuThreadLifecycleTrace>(host_base, layout.aicpu_lifecycle_traces_offset);
+        for (uint64_t thread = 0; thread < PLATFORM_MAX_AICPU_THREADS; ++thread)
+            lifecycle[thread].detail_address =
+                aligned_address + lifecycle_detail_offset + thread * sizeof(AicpuLifecycleDetail);
+    }
     if (layout.async_layout_offset != 0 && !initialize_async_completion(host_base, layout.total_size, async_plan)) {
         LOG_ERROR("A5 HBG: failed to initialize async completion storage");
         return false;
@@ -2183,7 +2226,7 @@ bool create_scheduler_state(
         scheduler_state_owners.emplace(
             runtime, SchedulerStateOwner{
                          reinterpret_cast<void *>(aligned_address), std::move(public_task_ids), layout, api,
-                         std::move(protocol_tasks), std::move(protocol_source)
+                         std::move(protocol_tasks), std::move(protocol_source), lifecycle_detail_offset
                      }
         );
     }

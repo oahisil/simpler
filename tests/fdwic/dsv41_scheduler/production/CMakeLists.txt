@@ -11,6 +11,9 @@ project(dsv41_native_runner LANGUAGES CXX)
 if(NOT SIMPLER_ROOT)
     get_filename_component(SIMPLER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
 endif()
+if(SIMPLER_PLATFORM_A6)
+    add_compile_definitions(SIMPLER_PLATFORM_A6=1)
+endif()
 set(COMMON "${SIMPLER_ROOT}/src/common")
 add_executable(native-runner
     runner.cpp

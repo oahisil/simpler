@@ -63,7 +63,8 @@ inline __aicore__ uint16_t scheduler_trace_source_index(uint32_t index) {
 }
 enum class SchedulerExecutionEngine : uint32_t { AIC = 0, AIV = 1 };
 inline constexpr uint32_t SCHEDULER_EXECUTION_ENGINE_COUNT = 2;
-inline constexpr uint32_t SCHEDULER_CLUSTER_CAPACITY = SCHEDULER_WORKER_CAPACITY / 3;
+inline constexpr uint32_t SCHEDULER_CLUSTER_CAPACITY = PLATFORM_MAX_BLOCKDIM;
+static_assert(SCHEDULER_CLUSTER_CAPACITY * PLATFORM_CORES_PER_BLOCKDIM <= SCHEDULER_WORKER_CAPACITY);
 inline constexpr uint32_t SCHEDULER_ACTIVITY_CAPACITY = 1024;
 inline constexpr uint64_t SCHEDULER_PROFILING_TASK_TIMING_LEVEL = 1;
 inline constexpr uint64_t SCHEDULER_PROFILING_SCHEDULE_TIMING_LEVEL = 2;
@@ -329,10 +330,13 @@ inline __aicore__ bool scheduler_task_requires_sync_start(uint8_t flags) {
     return (flags & SCHEDULER_TASK_SYNC_START) != 0;
 }
 
-// A lone AIV subtask can run on either of a cluster's two V lanes, so it has
-// two claimable positions there; every other shape is pinned to one.
+inline __aicore__ constexpr LaneMask scheduler_cluster_lanes() {
+    return LaneMask{true, true, PLATFORM_AIV_CORES_PER_BLOCKDIM > 1};
+}
+
+// A single Vector subtask can run on every physical Vector lane in the cluster.
 inline __aicore__ uint64_t scheduler_block_claim_positions(LaneMask active_mask, uint64_t clusters) {
-    return clusters * (active_mask.to_shape() == ResourceShape::AIV ? 2 : 1);
+    return clusters * (active_mask.to_shape() == ResourceShape::AIV ? PLATFORM_AIV_CORES_PER_BLOCKDIM : 1);
 }
 
 inline __aicore__ bool scheduler_task_is_inline(uint8_t flags) { return (flags & SCHEDULER_TASK_INLINE) != 0; }
@@ -356,11 +360,12 @@ inline __aicore__ bool scheduler_task_has_fixed_owners(uint8_t flags) {
 
 #if !defined(__CCE_AICORE__)
 // Each cube (including its MIX partners) owns one block per cluster. A pure
-// vector task uses both vector positions. Vector-only MIX keeps dynamic distribution.
+// vector task can use each physical vector position. Vector-only MIX keeps dynamic distribution.
 inline bool scheduler_is_exact_owner_wave(const SchedulerTaskMetadata &meta, uint64_t clusters) {
     const auto lanes = meta.active_mask;
     return clusters != 0 && scheduler_task_is_executable(meta.flags) && !scheduler_task_is_inline(meta.flags) &&
-           !scheduler_task_has_predicate(meta.flags) && (lanes.has_aic() || lanes.count() == 1) &&
+           !scheduler_task_has_predicate(meta.flags) &&
+           (lanes.count() == 1 || (lanes.has_aic() && scheduler_cluster_lanes().contains(lanes))) &&
            meta.logical_block_num == scheduler_block_claim_positions(lanes, clusters);
 }
 #endif
@@ -467,7 +472,15 @@ inline __aicore__ uint32_t scheduler_sector_capacity(uint32_t blocks, uint32_t p
 inline constexpr uint64_t SCHEDULER_BOOTSTRAP_CLUSTER_INIT = 1;
 inline constexpr uint64_t SCHEDULER_BOOTSTRAP_AIC_DONE = 2;
 inline constexpr uint64_t SCHEDULER_BOOTSTRAP_AIV1_DONE = 4;
-inline constexpr uint64_t SCHEDULER_BOOTSTRAP_CLUSTER_DONE = 7;
+static_assert(PLATFORM_AIV_CORES_PER_BLOCKDIM == 1 || PLATFORM_AIV_CORES_PER_BLOCKDIM == 2);
+inline constexpr uint64_t SCHEDULER_BOOTSTRAP_CLUSTER_DONE =
+    SCHEDULER_BOOTSTRAP_CLUSTER_INIT | SCHEDULER_BOOTSTRAP_AIC_DONE |
+    (PLATFORM_AIV_CORES_PER_BLOCKDIM == 2 ? SCHEDULER_BOOTSTRAP_AIV1_DONE : 0);
+#if defined(SIMPLER_PLATFORM_A6)
+static_assert(SCHEDULER_BOOTSTRAP_CLUSTER_DONE == 3);
+#else
+static_assert(SCHEDULER_BOOTSTRAP_CLUSTER_DONE == 7);
+#endif
 
 // Host initializes this line before launch; workers access it only atomically.
 struct alignas(SCHEDULER_GM_ATOMIC_SECTOR_BYTES) SchedulerBootstrapCluster {
@@ -624,6 +637,7 @@ struct alignas(64) AicpuThreadLifecycleTrace {
     uint64_t exit_signal_end_cycles;
     uint64_t exit_wait_start_cycles;
     uint64_t exit_wait_end_cycles;
+    uint64_t detail_address;
 };
 
 // Zero denotes an unused bank. A published MIX block fits in the 16-bit plan.
@@ -1100,6 +1114,7 @@ scheduler_init_prepared_execution_records(void *base, const AicoreSchedulerLayou
         uint32_t count = 0;
         uint64_t end = 0;
         if (plans == nullptr || !meta.active_mask.is_valid() ||
+            (meta.active_mask.is_mix() && !scheduler_cluster_lanes().contains(meta.active_mask)) ||
             !scheduler_subtask_count_checked(meta.logical_block_num, lanes, &count) ||
             !scheduler_layout_checked_add(next_execution, count, &end) || end > layout.prepared.execution_count)
             return false;
@@ -1132,6 +1147,7 @@ inline bool scheduler_init_spmd_task_records(void *base, const AicoreSchedulerLa
         const uint32_t active_subtasks = static_cast<uint32_t>(meta.active_mask.count());
         uint32_t expected_subtasks = 0;
         if (!meta.active_mask.is_valid() ||
+            (meta.active_mask.is_mix() && !scheduler_cluster_lanes().contains(meta.active_mask)) ||
             !scheduler_subtask_count_checked(meta.logical_block_num, active_subtasks, &expected_subtasks) ||
             scheduler_task_is_mix(meta.flags) != (active_subtasks > 1) ||
             scheduler_task_is_spmd(meta.flags) != (meta.logical_block_num > 1) ||

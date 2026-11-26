@@ -582,3 +582,14 @@ def test_background_capture_accepts_logs_without_run_identity(tmp_path, monkeypa
     assert "run_epoch" not in log.read_text()
     _convert(monkeypatch, path)
     assert json.loads(path.read_text())["metadata"]["clock_alignment"]["status"] == "bounded"
+
+
+def test_device_only_trace_excludes_host_without_rewriting_raw_capture(tmp_path, monkeypatch):
+    path, _ = _artifacts(tmp_path)
+    original = path.read_bytes()
+    output = tmp_path / "device.json"
+    _convert(monkeypatch, path, "--device-only", "-o", str(output))
+    events = json.loads(output.read_bytes())["traceEvents"]
+    assert path.read_bytes() == original
+    assert not any(e.get("args", {}).get("phase") == "orch_submit" for e in events)
+    assert any(e.get("pid") == 4 and e.get("ph") == "X" for e in events)

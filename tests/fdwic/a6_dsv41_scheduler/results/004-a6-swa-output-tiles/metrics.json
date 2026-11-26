@@ -1,0 +1,133 @@
+{
+  "stage": "004-a6-swa-output-tiles",
+  "baseline": "003-a6-swa-blocks/quant54-oa54",
+  "device_measurements": "measured",
+  "fixture_sha256": "a25b3c4241ac4a8d46e0f3103e2f0c4bad57d268abacb5f73d478b8ba7291dcf",
+  "profiles": {
+    "quant54-oa54": {
+      "executions": 604,
+      "changed_kernel_ids_vs_003": [],
+      "kernel_count": 19,
+      "plan_records_verified": 2735,
+      "l0_kernel_window_us": 316.57,
+      "l0_device_wall_us": 404.002,
+      "checked_writable_buffers": 30,
+      "l0_before_us": 51.539,
+      "l0_after_us": 35.893,
+      "l1_sync_bound_us": 209.01,
+      "l0_above_l1_bound_percent": 51.46,
+      "l3_mean_us": {
+        "t21_kernel_span": 37.289,
+        "t27_kernel_span": 56.147,
+        "kernel_window": 633.469,
+        "device_wall": 1180.725
+      }
+    },
+    "post54": {
+      "executions": 594,
+      "changed_kernel_ids_vs_003": [
+        27
+      ],
+      "kernel_count": 19,
+      "plan_records_verified": 2735,
+      "l0_kernel_window_us": 299.023,
+      "l0_device_wall_us": 388.655,
+      "checked_writable_buffers": 30,
+      "l0_before_us": 54.176,
+      "l0_after_us": 35.456,
+      "l1_sync_bound_us": 200.21,
+      "l0_above_l1_bound_percent": 49.35,
+      "l3_mean_us": {
+        "t21_kernel_span": 35.761,
+        "t27_kernel_span": 18.052,
+        "kernel_window": 593.991,
+        "device_wall": 1127.316
+      }
+    },
+    "ob54": {
+      "executions": 626,
+      "changed_kernel_ids_vs_003": [
+        23
+      ],
+      "kernel_count": 19,
+      "plan_records_verified": 2735,
+      "l0_kernel_window_us": 311.468,
+      "l0_device_wall_us": 396.992,
+      "checked_writable_buffers": 30,
+      "l0_before_us": 50.951,
+      "l0_after_us": 34.574,
+      "l1_sync_bound_us": 199.77,
+      "l0_above_l1_bound_percent": 55.91,
+      "l3_mean_us": {
+        "t21_kernel_span": 30.226,
+        "t27_kernel_span": 56.91,
+        "kernel_window": 624.042,
+        "device_wall": 1182.339
+      }
+    },
+    "post54-ob54": {
+      "executions": 616,
+      "changed_kernel_ids_vs_003": [
+        23,
+        27
+      ],
+      "kernel_count": 19,
+      "plan_records_verified": 2735,
+      "l0_kernel_window_us": 290.068,
+      "l0_device_wall_us": 377.707,
+      "checked_writable_buffers": 30,
+      "l0_before_us": 51.946,
+      "l0_after_us": 35.693,
+      "l1_sync_bound_us": 192.76,
+      "l0_above_l1_bound_percent": 50.48,
+      "l3_mean_us": {
+        "t21_kernel_span": 28.707,
+        "t27_kernel_span": 18.243,
+        "kernel_window": 582.659,
+        "device_wall": 1130.324,
+        "before": 177.246,
+        "swimlane_init": 98.602,
+        "handshake": 8.596,
+        "bootstrap_wait": 47.309,
+        "after": 370.419,
+        "exit_wait": 51.237,
+        "swimlane_collect": 291.242
+      },
+      "l3_representative_run": {
+        "round": 6,
+        "executions": 616,
+        "device_wall_us": 1146.62
+      },
+      "default_build_matches_original_combo": {
+        "plan": true,
+        "kernel_binaries": 19,
+        "callable": true
+      }
+    }
+  },
+  "a5_control": {
+    "executions": 578,
+    "same_19_binaries_plan_and_callable_as_003": true,
+    "padding_blocks": 80
+  },
+  "coverage_check": {
+    "kind": "host_kernel_entry_index_check",
+    "ob_columns_once": 5120,
+    "post_chunks": 160,
+    "post_streams_per_chunk": 4
+  },
+  "comparison_control": "quant54-oa54",
+  "selected_profile": "post54-ob54",
+  "measurement": {
+    "platform": "a6",
+    "aic": 54,
+    "aiv": 54,
+    "warmup_per_level": 1,
+    "rounds_per_level": 10,
+    "aggregation": "arithmetic_mean",
+    "time_unit": "us",
+    "l1_quantum_ns": 100,
+    "l1_all_rounds_optimal_each_profile": true,
+    "padding_blocks": 80
+  }
+}

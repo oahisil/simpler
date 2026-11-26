@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <type_traits>
 
+#include "host_build_graph/cluster_signal_layout.h"
 #include "scheduler_scalar_record.h"
 
 #if defined(__CCE_AICORE__)
@@ -23,9 +24,8 @@
 #define SCHEDULER_CLUSTER_SSBUF
 #endif
 
-inline constexpr uint32_t SCHEDULER_CLUSTER_REGION_OFFSET = 2 * 1024;
-inline constexpr uint32_t SCHEDULER_CLUSTER_REGION_BYTES = 1024;
-static_assert(SCHEDULER_CLUSTER_REGION_OFFSET + SCHEDULER_CLUSTER_REGION_BYTES == PLATFORM_SSBUF_SIZE);
+using SchedulerClusterRegion = SchedulerClusterSsbufRegion<PLATFORM_CORES_PER_BLOCKDIM>;
+static_assert(SchedulerClusterRegion::capacity == PLATFORM_SSBUF_SIZE);
 
 // AIV0 publishes the descriptor and the cluster's monotonic order boundary.
 struct SchedulerClusterDescriptor {
@@ -54,7 +54,7 @@ struct SchedulerClusterSignal {
         volatile uint64_t claim_end_cycles;
     } l2_proxy[SCHEDULER_MIX_MEMBER_COUNT];
 };
-static_assert(sizeof(SchedulerClusterSignal) <= SCHEDULER_CLUSTER_REGION_BYTES);
+static_assert(SchedulerClusterRegion::offset + sizeof(SchedulerClusterSignal) <= PLATFORM_SSBUF_SIZE);
 static_assert(alignof(SchedulerClusterSignal) <= 8 && std::is_standard_layout_v<SchedulerClusterSignal>);
 
 inline __aicore__ uint8_t scheduler_mix_accountant_lane(LaneMask active) {
@@ -63,7 +63,7 @@ inline __aicore__ uint8_t scheduler_mix_accountant_lane(LaneMask active) {
 
 inline __aicore__ SCHEDULER_CLUSTER_SSBUF SchedulerClusterSignal *scheduler_cluster_signal_at(uint64_t hardware_base) {
     return reinterpret_cast<SCHEDULER_CLUSTER_SSBUF SchedulerClusterSignal *>(
-        hardware_base + SCHEDULER_CLUSTER_REGION_OFFSET
+        hardware_base + SchedulerClusterRegion::offset
     );
 }
 

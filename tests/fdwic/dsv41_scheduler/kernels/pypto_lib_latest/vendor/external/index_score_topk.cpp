@@ -16,6 +16,20 @@ using namespace pto;
 
 namespace {
 namespace score_core {
+#if defined(__NPU_ARCH__) && __NPU_ARCH__ == 9201
+constexpr int POOL_VECTOR_LANES = 1;
+#if defined(__DAV_VEC__)
+using ShiftCounts = vector_u32;
+#endif
+#else
+constexpr int POOL_VECTOR_LANES = 2;
+#if defined(__DAV_VEC__)
+using ShiftCounts = vector_s32;
+#endif
+#endif
+// A5 sends reduced scores to V1; the only receiver on A6 is V0.
+constexpr int POOL_SCORE_BANK = POOL_VECTOR_LANES == 1 ? 0 : 16;
+constexpr auto POOL_SCORE_RECEIVER = POOL_VECTOR_LANES == 1 ? AccToVecMode::SingleModeVec0 : AccToVecMode::SingleModeVec1;
 using F4 = float4_e2m1x2_t;
 using S = float8_e8m0_t;
 
@@ -346,7 +360,7 @@ namespace {
             vshls(shift, shift, 4, full32, MODE_ZEROING);
             vshrs(index, index, 1, full32, MODE_ZEROING);
             vgather2(packed, (__ubuf__ uint32_t*)scratch, index, full32);
-            vshr(packed, packed, (vector_s32&)shift, full32, MODE_ZEROING);
+            vshr(packed, packed, (ShiftCounts&)shift, full32, MODE_ZEROING);
             vpack(lane, packed, LOWER);
             key_cutoff = cutoff;
             vdup(key_boundary, lane, full, POS_LOWEST, MODE_ZEROING);
@@ -552,7 +566,7 @@ namespace {
                 vshrs(local, local, 1, full32, MODE_ZEROING);
                 vbr(gathered, 0u);
                 vgather2(gathered, (__ubuf__ uint32_t*)src, local, valid);
-                vshr(gathered, gathered, (vector_s32&)shift, full32, MODE_ZEROING);
+                vshr(gathered, gathered, (ShiftCounts&)shift, full32, MODE_ZEROING);
                 vpack(key, gathered, LOWER);
                 vector_bool packed_mask;
                 ppack(packed_mask, full32, LOWER);
@@ -1042,10 +1056,11 @@ namespace {
         }
 
         __aicore__ inline void gather_pool_half(__gm__ int64_t* args, int panel, __gm__ uint8_t* ring,
-                                                int slot, bool reuse) {
-            int lane = get_subblockid();
-            int ub_base = lane == 0 ? (slot == 0 ? 0 : 147456) : (slot == 0 ? 65536 : 222208);
-            auto physical = ub<uint32_t>(lane == 0 ? 49152 : 82944) + panel * 64 + lane * 32;
+                                                int slot, bool reuse, int lane) {
+            // The single receiver reuses the second lane's staging area for both GM halves.
+            const bool separate_first = POOL_VECTOR_LANES == 2 && lane == 0;
+            int ub_base = separate_first ? (slot == 0 ? 0 : 147456) : (slot == 0 ? 65536 : 222208);
+            auto physical = ub<uint32_t>(separate_first ? 49152 : 82944) + panel * 64 + lane * 32;
             auto payload = data<uint8_t>(args, 3);
             auto scale = data<uint8_t>(args, 4);
             if (reuse)
@@ -1092,7 +1107,7 @@ namespace {
 #endif
 
         // Each worker owns two 34 KiB gather slots and 12 KiB of sanitized pool metadata.
-        // AIV0 gathers the first 256 tokens; AIV1 gathers the second half and reduces scores.
+        // The two A5 lanes each gather 256 tokens. A6 gathers both halves in sequence and scores on V0.
         __aicore__ inline void run_pool(__gm__ int64_t* args) {
             int worker = get_block_idx(args), workers = get_block_num(args);
             int capacity = reinterpret_cast<__gm__ Tensor*>(args[12])->shapes[1];
@@ -1151,9 +1166,12 @@ namespace {
                 TEXTRACT(left_scale, query_scale, 0, 0);
 #else
                 prepare_weights(args, token, 1);
-                if (get_subblockid() == 0) {
+                if (POOL_VECTOR_LANES == 1 || get_subblockid() == 0) {
+                    // With one lane, keep the sanitized metadata in the score consumer's UB layout.
+                    constexpr int ids_base = POOL_VECTOR_LANES == 1 ? 134656 : 32768;
+                    constexpr int direct_base = POOL_VECTOR_LANES == 1 ? 212992 : 40960;
                     Tile<TileType::Vec, int32_t, 1, 16384, BLayout::RowMajor, 1, DYNAMIC> pages(table_width);
-                    TASSIGN(pages, 73728);
+                    TASSIGN(pages, POOL_VECTOR_LANES == 1 ? 143360 : 73728);
                     load_value(pages, (GM<int32_t, 1, DYNAMIC, 1, DYNAMIC>(
                                           data<int32_t>(args, 5) + request * table_width,
                                           TileShape2D<int32_t, 1, DYNAMIC>(1, table_width),
@@ -1161,9 +1179,9 @@ namespace {
                     set_flag(PIPE_MTE2, PIPE_S, EVENT_ID0);
                     wait_flag(PIPE_MTE2, PIPE_S, EVENT_ID0);
                     Tile<TileType::Vec, int32_t, 1, 2048, BLayout::RowMajor, 1, DYNAMIC> ids(capacity);
-                    TASSIGN(ids, 32768);
+                    TASSIGN(ids, ids_base);
                     Vec<int32_t, 1, 2048> padded_ids;
-                    TASSIGN(padded_ids, 32768);
+                    TASSIGN(padded_ids, ids_base);
                     TEXPANDS(padded_ids, int32_t(-1));
                     set_flag(PIPE_V, PIPE_MTE2, EVENT_ID0);
                     wait_flag(PIPE_V, PIPE_MTE2, EVENT_ID0);
@@ -1173,12 +1191,12 @@ namespace {
                                         BaseShape2D<int32_t, 1, DYNAMIC>(1, capacity))));
                     set_flag(PIPE_MTE2, PIPE_V, EVENT_ID0);
                     wait_flag(PIPE_MTE2, PIPE_V, EVENT_ID0);
-                    prepare_pool_metadata(ids.data(), pages.data(), ub<int32_t>(40960), padded_capacity,
+                    prepare_pool_metadata(ids.data(), pages.data(), ub<int32_t>(direct_base), padded_capacity,
                                           count, visible, table_width,
                                           reinterpret_cast<__gm__ Tensor*>(args[3])->shapes[0]);
-                    pool_physical_rows(ids.data(), pages.data(), ub<uint32_t>(49152), padded_capacity);
+                    pool_physical_rows(ids.data(), pages.data(), ub<uint32_t>(POOL_VECTOR_LANES == 1 ? 82944 : 49152), padded_capacity);
                     Vec<int32_t, 1, 1024> direct;
-                    TASSIGN(direct, 40960);
+                    TASSIGN(direct, direct_base);
                     set_flag(PIPE_V, PIPE_MTE3, EVENT_ID0);
                     wait_flag(PIPE_V, PIPE_MTE3, EVENT_ID0);
                     store_value((GM<int32_t, 1, 2048, 1, 2048>(metadata)), padded_ids);
@@ -1211,7 +1229,7 @@ namespace {
 #endif
 #if defined(__DAV_CUBE__)
                 wait_intra_block(PIPE_S, 7);
-                set_intra_block(PIPE_S, 23);
+                if constexpr (POOL_VECTOR_LANES == 2) set_intra_block(PIPE_S, 23);
 #endif
                 for (int local_panel = 0; local_panel < panels; ++local_panel) {
                     int panel = first_panel + local_panel;
@@ -1225,7 +1243,7 @@ namespace {
                     bool direct = page0 >= 0 && page1 >= 0 && page2 >= 0 && page3 >= 0;
                     if (!direct) {
                         wait_intra_block(PIPE_MTE2, 8 + slot * 2);
-                        wait_intra_block(PIPE_MTE2, 24 + slot * 2);
+                        if constexpr (POOL_VECTOR_LANES == 2) wait_intra_block(PIPE_MTE2, 24 + slot * 2);
                     }
                     using Key =
                         Tile<TileType::Mat, F4, 128, 512, BLayout::RowMajor, 128, 512, SLayout::ColMajor>;
@@ -1284,19 +1302,19 @@ namespace {
                     TMATMUL_MX<AccPhase::Final>(dot, left, left_scale, right, right_scale);
                     set_flag(PIPE_M, PIPE_MTE1, event_t(2 + slot));
                     if (local_panel >= 2)
-                        wait_intra_block(PIPE_FIX, slot * 2 + 17);
+                        wait_intra_block(PIPE_FIX, slot * 2 + POOL_SCORE_BANK + 1);
                     using Received = Vec<bfloat16_t, 32, 512>;
                     Received received;
                     TASSIGN(received, slot * 32768);
-                    TMOV<STPhase::Final, Received, TileAcc<float, 32, 512>, AccToVecMode::SingleModeVec1,
+                    TMOV<STPhase::Final, Received, TileAcc<float, 32, 512>, POOL_SCORE_RECEIVER,
                          ReluPreMode::NormalRelu>(received, dot);
-                    set_intra_block(PIPE_FIX, slot * 2 + 16);
+                    set_intra_block(PIPE_FIX, slot * 2 + POOL_SCORE_BANK);
                     if (!direct) {
                         set_intra_block(PIPE_MTE2, 9 + slot * 2);
-                        set_intra_block(PIPE_MTE2, 25 + slot * 2);
+                        if constexpr (POOL_VECTOR_LANES == 2) set_intra_block(PIPE_MTE2, 25 + slot * 2);
                     }
 #else
-                    int direct_base = get_subblockid() == 0 ? 40960 : 212992;
+                    int direct_base = POOL_VECTOR_LANES == 2 && get_subblockid() == 0 ? 40960 : 212992;
                     bool direct = ub<int32_t>(direct_base)[panel * 32] >= 0 &&
                                   ub<int32_t>(direct_base)[panel * 32 + 8] >= 0;
                     direct = direct && ub<int32_t>(direct_base)[panel * 32 + 16] >= 0 &&
@@ -1304,14 +1322,17 @@ namespace {
                     if (!direct) {
                         if (slot == 0 ? gathered_slot0 : gathered_slot1)
                             wait_intra_block(PIPE_MTE2, 9 + slot * 2);
-                        gather_pool_half(args, panel, ring, slot, slot == 0 ? gathered_slot0 : gathered_slot1);
+                        gather_pool_half(args, panel, ring, slot, slot == 0 ? gathered_slot0 : gathered_slot1,
+                                         POOL_VECTOR_LANES == 1 ? 0 : get_subblockid());
+                        if constexpr (POOL_VECTOR_LANES == 1)
+                            gather_pool_half(args, panel, ring, slot, true, 1);
                         set_intra_block(PIPE_MTE3, 8 + slot * 2);
                         if (slot == 0)
                             gathered_slot0 = true;
                         else
                             gathered_slot1 = true;
                     }
-                    if (get_subblockid() == 1) {
+                    if (POOL_VECTOR_LANES == 1 || get_subblockid() == 1) {
                         wait_intra_block(PIPE_V, slot * 2);
                         Vec<int32_t, 1, 512> raw_valid;
                         Vec<uint16_t, 1, 512> valid;
@@ -1332,8 +1353,8 @@ namespace {
                     wait_flag(PIPE_M, PIPE_MTE1, event_t(2 + slot));
                 }
                 for (int slot = 0; slot < minimum(2, panels); ++slot)
-                    wait_intra_block(PIPE_FIX, slot * 2 + 17);
-                wait_intra_block(PIPE_S, 22);
+                    wait_intra_block(PIPE_FIX, slot * 2 + POOL_SCORE_BANK + 1);
+                wait_intra_block(PIPE_S, POOL_SCORE_BANK + 6);
                 set_intra_block(PIPE_S, 4);
 #else
                 if (gathered_slot0)
@@ -1344,7 +1365,7 @@ namespace {
                     wait_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID4);
                 if (gathered_slot1)
                     wait_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID5);
-                if (get_subblockid() == 1) {
+                if (POOL_VECTOR_LANES == 1 || get_subblockid() == 1) {
                     CandidateKeys keys;
                     CandidateIndices indices;
                     TASSIGN(keys, 51200);
@@ -1371,7 +1392,8 @@ namespace {
                     }
                     pipe_barrier(PIPE_ALL);
                     set_intra_block(PIPE_MTE3, 6);
-                } else {
+                }
+                if (POOL_VECTOR_LANES == 1 || get_subblockid() == 0) {
                     // Keep the current pool metadata live until both consumers finish.
                     wait_intra_block(PIPE_S, 4);
                 }
@@ -1382,12 +1404,12 @@ namespace {
 
 #if defined(__DAV_VEC__)
         __aicore__ inline void merge_pool(__gm__ int64_t* args) {
-            int worker = get_block_idx(args) * 2 + get_subblockid();
+            int worker = get_block_idx(args) * POOL_VECTOR_LANES + (POOL_VECTOR_LANES == 1 ? 0 : get_subblockid());
             int workers = get_block_num(args), tokens = args[18];
             int capacity = reinterpret_cast<__gm__ Tensor*>(args[12])->shapes[1];
             int panels = (capacity + 63) / 64, total = tokens * panels, table_width = args[17];
             int owners = minimum(workers, total);
-            for (int token = worker; token < tokens; token += workers * 2) {
+            for (int token = worker; token < tokens; token += workers * POOL_VECTOR_LANES) {
                 int first = ((token * panels + 1) * owners - 1) / total;
                 int last = (((token + 1) * panels) * owners - 1) / total;
                 if (first == last)
@@ -1766,7 +1788,11 @@ extern "C" __aicore__ void kernel_entry(__gm__ int64_t* args) {
 #else
     set_ctrl(sbitset0(get_ctrl(), pto::MAD_MODE_BIT));
 #endif
+#if defined(DSV41_POOL_TOPK_ENTRY)
+    {
+#else
     if (args[19] < 0) {
+#endif
         fused::run_pool(args);
         SYNCALL<SyncCoreType::AIVOnly>();
 #if defined(__DAV_VEC__)
@@ -1774,6 +1800,7 @@ extern "C" __aicore__ void kernel_entry(__gm__ int64_t* args) {
 #endif
         return;
     }
+#if !defined(DSV41_POOL_TOPK_ENTRY)
     if (args[19] == 0) {
         if (reinterpret_cast<__gm__ Tensor*>(args[3])->shapes[1] == 64) fused::run<4, 64>(args);
         else fused::run<4, 128>(args);
@@ -1782,5 +1809,6 @@ extern "C" __aicore__ void kernel_entry(__gm__ int64_t* args) {
     SYNCALL<SyncCoreType::AIVOnly>();
 #if defined(__DAV_VEC__)
     fused::merge(args);
+#endif
 #endif
 }

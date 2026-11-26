@@ -390,7 +390,7 @@ __aicore__ bool bootstrap_ready_graph(
     );
     if (fill_failed) return false;
 
-    // AIC and AIV1 set their own DONE bits after the first fill. AIV0 waits for both before counting the cluster.
+    // AIV0 counts the cluster after every other lane has set its DONE bit.
     scheduler_cache_barrier();
     if (scheduler_read_worker_error(run_control, scheduler->worker_id()) != 0) return false;
     if (!scheduler->is_mix_coordinator()) {

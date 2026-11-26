@@ -40,7 +40,7 @@ def _export_native(destination, root, tools, native_moe_bundle):
     subprocess.run(command, check=True)
 
 
-def export(bundle, capture, flavor, output, tools, native_moe_bundle=None, case_names=None):
+def export(bundle, capture, flavor, output, tools, native_moe_bundle=None, case_names=None, *, runner=None):
     if flavor != "pypto_lib_latest":
         raise ValueError(f"Unknown workload: {flavor}")
     root = Path(__file__).resolve().parents[1]
@@ -103,7 +103,7 @@ def export(bundle, capture, flavor, output, tools, native_moe_bundle=None, case_
         (destination / "slice.txt").write_text(f"{first} {last}\n")
         subprocess.run(
             [
-                str(tools / "native-runner"),
+                str(runner or tools / "native-runner"),
                 "--repack-orchestration",
                 str(bundle / "original-callable.bin"),
                 str(tools / "libreplay.so"),
@@ -144,6 +144,7 @@ if __name__ == "__main__":
     parser.add_argument("--flavor", choices=["pypto_lib_latest"], default="pypto_lib_latest")
     parser.add_argument("--tools", type=Path, default=Path(__file__).resolve().parents[1] / "build/portable/host")
     parser.add_argument("--native-moe-bundle", type=Path, help="Reuse an existing compatible native MoE bundle")
+    parser.add_argument("--case", choices=["swa"], help="Prepare only the selected SWA slice")
     args = parser.parse_args()
     export(
         args.bundle.resolve(),
@@ -152,4 +153,5 @@ if __name__ == "__main__":
         args.output.resolve(),
         args.tools.resolve(),
         args.native_moe_bundle,
+        case_names=(args.case,) if args.case else None,
     )

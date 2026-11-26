@@ -24,6 +24,11 @@ using SimPipe = TPipe<0, Direction::DIR_C2V, Rows * 128 * 4, 2, 2>;
 #endif
 
 namespace {
+#if defined(__NPU_ARCH__) && __NPU_ARCH__ == 9201
+constexpr int VECTOR_LANES = 1;
+#else
+constexpr int VECTOR_LANES = 2;
+#endif
 template <typename T, int R, int C>
 using Vec = Tile<TileType::Vec, T, R, C>;
 template <typename T, int C>
@@ -205,7 +210,7 @@ __aicore__ inline void multiply(FullA<M>& am, FullB& bm, ScaleA<M>& sa, ScaleB& 
 template <int M>
 __aicore__ inline void project(__gm__ int64_t* args, int block) {
     using namespace mxfp8_projection;
-    constexpr int Rows = M / 2;
+    constexpr int Rows = M / VECTOR_LANES;
     constexpr int BBase = (M * 1320 + 40 * 256 + 65535) / 65536 * 65536;
 #if defined(__CPU_SIM)
     SimPipe<Rows> pipe(nullptr, 0, 0);
@@ -249,12 +254,13 @@ __aicore__ inline void project(__gm__ int64_t* args, int block) {
             TPUSH<SimPipe<Rows>, Acc<M>, TileSplitAxis::TILE_UP_DOWN>(pipe, acc);
 #else
             wait_intra_block(PIPE_FIX, head * 2 + 1);
-            wait_intra_block(PIPE_FIX, head * 2 + 17);
+            if constexpr (VECTOR_LANES == 2) wait_intra_block(PIPE_FIX, head * 2 + 17);
             Vec<float, Rows, 128> received;
             TASSIGN(received, head * Rows * 128 * 4);
-            TMOV<decltype(received), Acc<M>, AccToVecMode::DualModeSplitM>(received, acc);
+            constexpr auto mode = VECTOR_LANES == 1 ? AccToVecMode::SingleModeVec0 : AccToVecMode::DualModeSplitM;
+            TMOV<decltype(received), Acc<M>, mode>(received, acc);
             set_intra_block(PIPE_FIX, head * 2);
-            set_intra_block(PIPE_FIX, head * 2 + 16);
+            if constexpr (VECTOR_LANES == 2) set_intra_block(PIPE_FIX, head * 2 + 16);
 #endif
         }
         wait_flag(PIPE_M, PIPE_MTE1, EVENT_ID0);
@@ -264,9 +270,9 @@ __aicore__ inline void project(__gm__ int64_t* args, int block) {
 #if !defined(__CPU_SIM)
     if (args[8] > 0) {
         wait_intra_block(PIPE_FIX, 1);
-        wait_intra_block(PIPE_FIX, 17);
+        if constexpr (VECTOR_LANES == 2) wait_intra_block(PIPE_FIX, 17);
         wait_intra_block(PIPE_FIX, 3);
-        wait_intra_block(PIPE_FIX, 19);
+        if constexpr (VECTOR_LANES == 2) wait_intra_block(PIPE_FIX, 19);
     }
 #endif
 }
@@ -277,8 +283,8 @@ __aicore__ inline void project(__gm__ int64_t* args, int block) {
 namespace {
 template <int M>
 __aicore__ inline void finish(__gm__ int64_t* args, int block) {
-    int sub = get_subblockid();
-    constexpr int Rows = M / 2;
+    int sub = VECTOR_LANES == 1 ? 0 : get_subblockid();
+    constexpr int Rows = M / VECTOR_LANES;
     constexpr int RawBytes = Rows * 128 * 4;
     constexpr int CosBase = 2 * RawBytes;
     constexpr int SinBase = CosBase + Rows * 32 * 4;
@@ -298,7 +304,7 @@ __aicore__ inline void finish(__gm__ int64_t* args, int block) {
     TASSIGN(exponents, ExponentBase);
     TASSIGN(scales, ScaleBase);
 #if !defined(__CPU_SIM)
-    // Both AIV receivers release their UB slots before the first C2V transfer.
+    // The AIV receivers release their UB slots before the first C2V transfer.
     if (args[8] > 0) {
         set_intra_block(PIPE_V, 1);
         set_intra_block(PIPE_V, 3);

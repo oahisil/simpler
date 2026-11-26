@@ -17,8 +17,8 @@
 #include "scheduler_types.h"
 #include "scheduler_scalar_record.h"
 
-// Onboard Host validates the counter and notification mappings before publishing the image.
-#if defined(__CCE_AICORE__)
+// A5 Host requires mapped CntNotify slots. A6 publishes no counter table and completes tasks in GM.
+#if defined(__CCE_AICORE__) && !defined(SIMPLER_PLATFORM_A6)
 inline constexpr bool SCHEDULER_REQUIRES_CNT_NOTIFY = true;
 #else
 inline constexpr bool SCHEDULER_REQUIRES_CNT_NOTIFY = false;

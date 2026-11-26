@@ -155,14 +155,14 @@ class RuntimeCompiler:
             self.platform_dir = self.project_root / "src" / "a2a3" / "platform" / "onboard"
         elif platform == "a2a3sim":
             self.platform_dir = self.project_root / "src" / "a2a3" / "platform" / "sim"
-        elif platform == "a5":
+        elif platform in ("a5", "a6"):
             self.platform_dir = self.project_root / "src" / "a5" / "platform" / "onboard"
         elif platform == "a5sim":
             self.platform_dir = self.project_root / "src" / "a5" / "platform" / "sim"
         elif platform == "wsesim":
             self.platform_dir = self.project_root / "src" / "wse" / "platform" / "sim"
         else:
-            raise ValueError(f"Unknown platform: {platform}. Supported: a2a3, a2a3sim, a5, a5sim, wsesim")
+            raise ValueError(f"Unknown platform: {platform}. Supported: a2a3, a2a3sim, a5, a5sim, a6, wsesim")
 
         if not self.platform_dir.is_dir():
             raise ValueError(f"Platform '{platform}' not found at {self.platform_dir}")
@@ -171,14 +171,14 @@ class RuntimeCompiler:
             self._init_a2a3()
         elif platform == "a2a3sim":
             self._init_a2a3sim()
-        elif platform == "a5":
-            self._init_a5()
+        elif platform in ("a5", "a6"):
+            self._init_a5_or_a6()
         elif platform == "a5sim":
             self._init_a5sim()
         elif platform == "wsesim":
             self._init_wsesim()
         else:
-            raise ValueError(f"Unknown platform: {platform}. Supported: a2a3, a2a3sim, a5, a5sim, wsesim")
+            raise ValueError(f"Unknown platform: {platform}. Supported: a2a3, a2a3sim, a5, a5sim, a6, wsesim")
 
     def _init_a2a3(self):
         """Initialize toolchains for real a2a3 hardware."""
@@ -219,8 +219,8 @@ class RuntimeCompiler:
         self.aicpu_target = BuildTarget(gxx, str(self.platform_dir / "aicpu"), "libaicpu_kernel.so")
         self.host_target = BuildTarget(gxx, str(self.platform_dir / "host"), "libhost_runtime.so")
 
-    def _init_a5(self):
-        """Initialize toolchains for real a5 hardware."""
+    def _init_a5_or_a6(self):
+        """Build the shared onboard sources with the selected chip toolchain."""
         env_manager.ensure("ASCEND_HOME_PATH")
         # a5 onboard always embeds the PTO-ISA SDMA workspace. Use the pinned
         # managed checkout so build metadata and load-time validation match
@@ -229,8 +229,7 @@ class RuntimeCompiler:
 
         self.pto_isa_root = ensure_pto_isa_root(verbose=True)
 
-        # AICore: Bisheng CCE compiler with A5 platform
-        ccec = CCECToolchain(platform="a5")
+        ccec = CCECToolchain(platform=self.platform)
         self.aicore_target = BuildTarget(ccec, str(self.platform_dir / "aicore"), "aicore_kernel.o")
 
         # AICPU: aarch64 cross-compiler
@@ -338,6 +337,8 @@ class RuntimeCompiler:
         else:
             raise ValueError(f"Invalid target platform: {target_platform}. Must be 'aicore', 'aicpu', or 'host'.")
 
+        if self.platform in ("a5", "a6"):
+            cmake_defines = {**(cmake_defines or {}), "SIMPLER_PLATFORM_A6": "1" if self.platform == "a6" else "0"}
         cmake_args = target.gen_cmake_args(
             include_dirs,
             source_dirs,

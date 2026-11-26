@@ -34,16 +34,18 @@
  * Maximum block dimension supported by platform
  * This is the fundamental platform capacity constraint.
  */
+#if defined(SIMPLER_PLATFORM_A6)
+constexpr int PLATFORM_MAX_BLOCKDIM = 54;
+constexpr int PLATFORM_AIV_CORES_PER_BLOCKDIM = 1;
+constexpr uint32_t PLATFORM_AICORE_PER_DIE = 35;  // Physical resource slots, including inactive pairs.
+#else
 constexpr int PLATFORM_MAX_BLOCKDIM = 36;
-
-/**
- * Core composition per block dimension
- * Current architecture: 1 block = 1 AIC cube + 2 AIV cubes
- */
-constexpr int PLATFORM_CORES_PER_BLOCKDIM = 3;
-constexpr int PLATFORM_AIC_CORES_PER_BLOCKDIM = 1;
 constexpr int PLATFORM_AIV_CORES_PER_BLOCKDIM = 2;
-constexpr uint32_t PLATFORM_SSBUF_SIZE = 3 * 1024;
+constexpr uint32_t PLATFORM_AICORE_PER_DIE = 18;
+#endif
+constexpr int PLATFORM_AIC_CORES_PER_BLOCKDIM = 1;
+constexpr int PLATFORM_CORES_PER_BLOCKDIM = PLATFORM_AIC_CORES_PER_BLOCKDIM + PLATFORM_AIV_CORES_PER_BLOCKDIM;
+constexpr uint32_t PLATFORM_SSBUF_SIZE = PLATFORM_CORES_PER_BLOCKDIM * 1024;
 
 /**
  * Maximum AICPU scheduling threads
@@ -485,10 +487,15 @@ constexpr int PLATFORM_SCOPE_STATS_TIMEOUT_SECONDS = 30;
 // Register Communication Configuration
 // =============================================================================
 
-// Register offsets for AICore SPR access
+// CP1 addresses in a single C or V register window.
+#if defined(SIMPLER_PLATFORM_A6)
+constexpr uint32_t REG_SPR_DATA_MAIN_BASE_OFFSET = 0x5500;  // IPC0, CP1 to AICore
+constexpr uint32_t REG_SPR_COND_OFFSET = 0x5520;            // IPC4, AICore to CP1
+#else
 constexpr uint32_t REG_SPR_DATA_MAIN_BASE_OFFSET = 0xD0;  // Task dispatch (AICPU→AICore)
 constexpr uint32_t REG_SPR_COND_OFFSET = 0x5108;          // Status (AICore→AICPU): 0=IDLE, 1=BUSY
-constexpr uint32_t REG_SPR_CTRL_OFFSET = 0x0;             // AICore internal CTRL SPR (bit0 = PMU enable)
+#endif
+constexpr uint32_t REG_SPR_CTRL_OFFSET = 0x0;  // AICore internal CTRL SPR (bit0 = PMU enable)
 
 // Exit signal for AICore shutdown
 constexpr uint32_t AICORE_EXIT_SIGNAL = 0x7FFFFFF0;
@@ -729,20 +736,15 @@ inline volatile uint8_t *sparse_reg_ptr(volatile uint8_t *reg_base, uint32_t off
 
 /**
  * Number of sub-cores per AICore
- * Hardware architecture: 1 AICore = 1 AIC + 2 AIV sub-cores
+ * Each group has one cube and the platform-specific number of vectors.
  */
 constexpr uint32_t PLATFORM_SUB_CORES_PER_AICORE = PLATFORM_CORES_PER_BLOCKDIM;
 
-/**
- * DAV 3510 chip architecture
- * - 2 dies, each with 18 AICores
- * - Each AICore has 3 sub-cores (1 AIC + 2 AIV)
- */
+// Physical group numbering restarts on the second die.
 constexpr uint32_t PLATFORM_NUM_DIES = 2;
-constexpr uint32_t PLATFORM_AICORE_PER_DIE = 18;
 
 /**
- * Maximum physical AICore count for DAV 3510 chip
+ * Number of addressable HAL resource slots across both dies.
  */
 namespace DAV_3510 {
 constexpr uint32_t PLATFORM_MAX_PHYSICAL_CORES = PLATFORM_NUM_DIES * PLATFORM_AICORE_PER_DIE;

@@ -98,6 +98,8 @@ def attach_execution_identities(section, tasks, runtime, *, schedule_clock=None)
     rows = {tuple(task[field] for field in JOIN): task for task in tasks}
     if len(rows) != len(tasks):
         raise ValueError("duplicate execution identity row join")
+    if section["records"] and not rows:
+        raise ValueError("execution identity join has no AICore timing rows; check the --profiling-dfx 1 runtime build")
     observed, executions = set(), set()
     positions, orders, groups, block_counts = {}, {}, {}, {}
     for record in section["records"]:

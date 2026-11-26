@@ -115,24 +115,54 @@ def test_prepare_rejects_unwrapped_runtime_before_creating_output(tmp_path, gate
     assert not output.exists()
 
 
-@pytest.mark.parametrize("selection", [[], ["--flavor", "all"], ["--flavor", "pypto_lib_latest"]])
-def test_prepare_passes_valid_snapshot_to_capture(tmp_path, gate, monkeypatch, selection):
+@pytest.mark.parametrize(
+    "selection, build_synthetic",
+    [([], True), (["--flavor", "all"], True), (["--flavor", "pypto_lib_latest"], False), (["--case", "swa"], False)],
+)
+def test_prepare_passes_valid_snapshot_to_capture(tmp_path, gate, monkeypatch, selection, build_synthetic):
     prepare = importlib.import_module("prepare")
     runtime = snapshot(tmp_path / "wrapper", gate)
     output = tmp_path / "prepared"
-    calls = []
-    monkeypatch.setattr(sys, "argv", ["prepare.py", str(runtime), str(output), *selection])
-    monkeypatch.setattr(prepare.subprocess, "run", lambda command, **kwargs: calls.append(command))
-    monkeypatch.setattr(prepare, "export", lambda *args, **kwargs: [])
+    runner = tmp_path / "shared-runner"
+    calls, exporters = [], []
+    monkeypatch.setattr(sys, "argv", ["prepare.py", str(runtime), str(output), "--runner", str(runner), *selection])
+    monkeypatch.setattr(prepare.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs["env"])))
+    monkeypatch.setattr(prepare, "export", lambda *args, **kwargs: exporters.append(kwargs) or [])
 
-    def build_diamond(variants, *args):
+    def build_diamond(variants, diamond_runner, *args):
+        assert diamond_runner == runner
         (variants / "balanced").mkdir(parents=True)
 
     monkeypatch.setattr(prepare, "build_diamond", build_diamond)
     monkeypatch.setattr(prepare, "build_bundle", lambda path, *args: path.mkdir(parents=True))
     prepare.main()
-    if "pypto_lib_latest" not in selection:
-        assert (output / "cases/synthetic/mpmd_diamond").is_dir()
-    assert len(calls) == 1 and calls[0][3] == str(runtime)
-    assert Path(calls[0][2]).name == "pypto_lib_latest"
+    assert (output / "cases/synthetic/mpmd_diamond").is_dir() == build_synthetic
+    assert len(calls) == 1
+    command, env = calls[0]
+    assert command[3] == str(runtime) and Path(command[2]).name == "pypto_lib_latest"
+    case_names = ("swa",) if "--case" in selection else prepare.MODEL_CASES
+    assert env["DSV41_RUNNER"] == str(runner) and exporters == [{"case_names": case_names, "runner": runner}]
     assert json.loads((output / "runtime.json").read_text())["path"] == str(runtime)
+
+
+def test_single_device_materialization_uses_matching_original_runtime(tmp_path, gate):
+    materialize = importlib.import_module("materialize")
+    runtime = snapshot(tmp_path / "wrapper", gate)
+    original = tmp_path / "original/a5/onboard"
+    manifest_path = tmp_path / "wrapper/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    originals = {}
+    for relative in manifest["snapshot_files"]:
+        if relative.endswith(("device_start_gate.o", "libhost_runtime_impl.so")):
+            continue
+        path = original.parents[1] / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"original")
+        originals[relative] = {"source": str(path), "stamp": gate.file_stamp(path)}
+    manifest.update(source_runtime_dir=str(original), original_binaries=originals)
+    manifest_path.write_text(json.dumps(manifest))
+    assert materialize.single_device_runtime(original, "host_build_graph") == original
+    assert materialize.single_device_runtime(runtime, "host_build_graph") == original
+    (original / "host_build_graph/libhost_runtime.so").write_bytes(b"rebuilt")
+    with pytest.raises(ValueError, match="Original runtime changed"):
+        materialize.single_device_runtime(runtime, "host_build_graph")

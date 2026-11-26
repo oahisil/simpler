@@ -139,6 +139,12 @@ a5_hbg_case(test_hbg_retirement_wiring.cpp
     COMPILE_OPTIONS -ffunction-sections -fdata-sections
     LINK_OPTIONS ${_retirement_gc_link_option})
 
+a5_hbg_case(test_hbg_paired_bootstrap.cpp NO_OBJS TIMEOUT 20
+    INCLUDES ${SIMPLER_SRC}/a5/platform/sim/aicore ${SIMPLER_SRC}/a5/runtime/host_build_graph
+    DEFINES __CPU_SIM SIMPLER_PLATFORM_A6=1
+    COMPILE_OPTIONS -ffunction-sections -fdata-sections
+    LINK_OPTIONS ${_retirement_gc_link_option})
+
 a5_hbg_case(test_hbg_gm_mix_startup.cpp
     INCLUDES
         ${SIMPLER_SRC}/a5/platform/sim/aicore

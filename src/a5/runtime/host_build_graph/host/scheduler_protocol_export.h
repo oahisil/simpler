@@ -444,7 +444,7 @@ inline std::string scheduler_export_protocol(
             row.number("topological_level", task.topological_level);
             row.number("bottom_level", task.bottom_level);
             row.number("cooperative_index", task.order.cooperative_index);
-            row.numbers("required_floor", task.order.required_floor, PLATFORM_CORES_PER_BLOCKDIM);
+            row.numbers("required_floor", task.order.required_floor, SUBTASK_SLOT_COUNT);
             row.numbers("kernel_ids", task.metadata.kernel_ids, 3);
             row.numbers("dependencies", task.dependencies.data(), task.dependencies.size());
         }

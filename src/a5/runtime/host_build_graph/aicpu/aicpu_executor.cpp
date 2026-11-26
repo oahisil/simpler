@@ -22,6 +22,7 @@
 #include "args_dump_service.h"
 #include "aicore_scheduler_error.h"
 #include "aicore_scheduler_state.h"
+#include "aicpu_lifecycle_detail.h"
 #include "scheduler_ready_watchdog.h"
 #include "scheduler_sink_observer.h"
 #include "aicpu/aicpu_device_config.h"
@@ -410,7 +411,9 @@ int32_t AicpuExecutor::init(Runtime *runtime) {
     const bool is_leader = (tidx == 0);
 
     if (is_leader) {
+        AicpuLifecycleDetailScope detail(runtime, tidx, AicpuLifecycleDetailKind::LocalSetup);
         LOG_INFO("AicpuExecutor: Initializing");
+        AicpuLifecycleDetailScope ccu_ready(runtime, tidx, AicpuLifecycleDetailKind::CcuReady);
         const uint64_t ready_start = get_sys_cnt_aicpu();
         const int ready_rc = simpler::ccu::wait_local_ready(
             runtime->dev.ccu_workspace_addr,
@@ -421,6 +424,7 @@ int32_t AicpuExecutor::init(Runtime *runtime) {
                 SPIN_WAIT_HINT();
             }
         );
+        ccu_ready.close();
         if (ready_rc != 0) {
             LOG_ERROR("Local CCU READY initialization failed: %d", ready_rc);
             init_failed_.store(true, std::memory_order_release);
@@ -438,6 +442,7 @@ int32_t AicpuExecutor::init(Runtime *runtime) {
         }
         hs_setup_done_.store(true, std::memory_order_release);
     } else {
+        AicpuLifecycleDetailScope detail(runtime, tidx, AicpuLifecycleDetailKind::SetupWait);
         join_initialization_phase(
             runtime,
             [this] {
@@ -456,6 +461,7 @@ int32_t AicpuExecutor::init(Runtime *runtime) {
     // and publishes the topology-dependent execution configuration.
     hs_arrived_.fetch_add(1, std::memory_order_acq_rel);
     if (is_leader) {
+        AicpuLifecycleDetailScope detail(runtime, tidx, AicpuLifecycleDetailKind::DiscoveryJoin);
         join_initialization_phase(
             runtime,
             [this, nthreads] {
@@ -463,6 +469,7 @@ int32_t AicpuExecutor::init(Runtime *runtime) {
             },
             init_failed_
         );
+        detail.close();
         completion_gate_.reset();
         if (aicore_lifecycle_.validate_discovery() != 0 || !schedules_on_aicore(runtime)) {
             LOG_ERROR("A5 HBG: invalid scheduler bootstrap");
@@ -496,6 +503,7 @@ int32_t AicpuExecutor::init(Runtime *runtime) {
         }
         hs_config_done_.store(true, std::memory_order_release);
     } else {
+        AicpuLifecycleDetailScope detail(runtime, tidx, AicpuLifecycleDetailKind::ConfigWait);
         join_initialization_phase(
             runtime,
             [this] {
@@ -543,6 +551,7 @@ int32_t AicpuExecutor::init(Runtime *runtime) {
     // Barrier 2: init cannot return until every successful slice is released,
     // or every failed slice has acknowledged EXIT.
     hs_release_arrived_.fetch_add(1, std::memory_order_acq_rel);
+    AicpuLifecycleDetailScope release_join(runtime, tidx, AicpuLifecycleDetailKind::ReleaseJoin);
     if (is_leader) {
         join_initialization_phase(
             runtime,
@@ -560,6 +569,7 @@ int32_t AicpuExecutor::init(Runtime *runtime) {
         while (!init_done_.load(std::memory_order_acquire))
             SPIN_WAIT_HINT();
     }
+    release_join.close();
     if (init_failed_.load(std::memory_order_acquire)) {
         if (started) {
             aicore_lifecycle_.signal_shutdown_partition(tidx);
@@ -736,9 +746,11 @@ int32_t AicpuExecutor::run(Runtime *runtime) {
     }
     bool shutdown_wait_timed_out = false;
     if (thread_idx == aicpu_thread_num_ - 1) {
+        AicpuLifecycleDetailScope detail(runtime, thread_idx, AicpuLifecycleDetailKind::Supervise);
         run_status_.store(supervise(runtime, thread_idx), std::memory_order_release);
         shutdown_ready_.store(true, std::memory_order_release);
     } else {
+        AicpuLifecycleDetailScope detail(runtime, thread_idx, AicpuLifecycleDetailKind::ShutdownWait);
         shutdown_wait_timed_out = await_shutdown(runtime, thread_idx);
     }
 
@@ -747,12 +759,14 @@ int32_t AicpuExecutor::run(Runtime *runtime) {
     if (args_dump_services_ != nullptr) args_dump_services_[thread_idx].stop();
     aicore_lifecycle_.signal_shutdown_partition(thread_idx);
     shutdown_signaled_.fetch_add(1, std::memory_order_acq_rel);
+    AicpuLifecycleDetailScope exit_join(runtime, thread_idx, AicpuLifecycleDetailKind::ExitSignalJoin);
     if (!wait_with_scheduler_timeout([this] {
             return shutdown_signaled_.load(std::memory_order_acquire) >= aicpu_thread_num_;
         })) {
         record_resident_timeout(runtime, SchedulerErrorSite::AICPU_SHUTDOWN_BARRIER_TIMEOUT);
         if (run_rc == 0) run_rc = -SIMPLER_ERROR_SCHEDULER_TIMEOUT;
     }
+    exit_join.close();
     int32_t shutdown_rc = aicore_lifecycle_.finish_shutdown_partition(thread_idx, runtime);
     // Both outcomes reach the terminal record before this thread's arrival, and
     // with the state that produced each: folding shutdown_rc into run_rc first
@@ -764,6 +778,7 @@ int32_t AicpuExecutor::run(Runtime *runtime) {
     terminal_.record_participant(run_rc, shutdown_rc);
     normal_path_claims_.fetch_add(1, std::memory_order_acq_rel);
     if (shutdown_rc != 0 && run_rc == 0) run_rc = shutdown_rc;
+    AicpuLifecycleDetailScope completion_join(runtime, thread_idx, AicpuLifecycleDetailKind::CompletionJoin);
     completion_gate_.arrive_and_finalize_if_last(aicpu_thread_num_, [&] {
         // Every other participant's writes are visible here — the gate's
         // arrival is acq_rel and this is the thread that closed it — so this is
@@ -777,16 +792,22 @@ int32_t AicpuExecutor::run(Runtime *runtime) {
         // the run owed. A partition that could not retire its cores returns
         // that failure and still arrives here.
         const bool cores_retired = aicore_lifecycle_.cores_retired();
+        AicpuLifecycleDetailScope diagnostics(runtime, thread_idx, AicpuLifecycleDetailKind::Diagnostics);
         (void)aicore_lifecycle_.settle_run_diagnostics(
             runtime,
             run_status_.load(std::memory_order_acquire) == 0 && !shutdown_wait_timed_out && args_dump_services_stopped()
         );
+        diagnostics.close();
         // The record is published either way — a run the host cannot read a
         // verdict for is worse than one that reports a failure — but a run
         // whose cores did not prove retirement did not finish the audited path,
         // so it cannot be published as Ok.
-        snapshot_run_terminal(runtime, cores_retired);
+        {
+            AicpuLifecycleDetailScope detail(runtime, thread_idx, AicpuLifecycleDetailKind::TerminalSnapshot);
+            snapshot_run_terminal(runtime, cores_retired);
+        }
         if (cores_retired) {
+            AicpuLifecycleDetailScope detail(runtime, thread_idx, AicpuLifecycleDetailKind::TimingPublish);
             AicoreWorkWindow work_window{};
             if (aicore_lifecycle_.retired_work_window(work_window, uses_kernel_work_window())) {
                 device_phase_set_aicore_work_window(work_window);
@@ -907,18 +928,28 @@ extern "C" int32_t aicpu_execute(Runtime *runtime) {
         return -1;
     }
     LOG_INFO("%s", "aicpu_execute: Starting AICPU kernel execution");
+    const int32_t detail_thread = platform_aicpu_affinity_thread_idx();
+    AicpuLifecycleDetailScope detail(runtime, detail_thread, AicpuLifecycleDetailKind::Executor);
 
     // init() barriers every thread internally until init is complete on the
     // leader (or a thread failed), then returns the status — so a non-zero
     // return is authoritative on all threads and no extra spin is needed.
-    const int32_t init_rc = g_aicpu_executor.init(runtime);
+    int32_t init_rc = 0;
+    {
+        AicpuLifecycleDetailScope phase(runtime, detail_thread, AicpuLifecycleDetailKind::Init);
+        init_rc = g_aicpu_executor.init(runtime);
+    }
     if (init_rc != 0) {
         LOG_ERROR("%s", "aicpu_execute: Initialization failed, aborting execution");
         const int32_t runtime_rc = publish_aicore_scheduler_runtime_error(runtime);
         return runtime_rc != 0 ? runtime_rc : init_rc;
     }
 
-    int32_t rc = g_aicpu_executor.run(runtime);
+    int32_t rc = 0;
+    {
+        AicpuLifecycleDetailScope phase(runtime, detail_thread, AicpuLifecycleDetailKind::Run);
+        rc = g_aicpu_executor.run(runtime);
+    }
     if (rc != 0) {
         LOG_ERROR("aicpu_execute: Thread execution failed with rc=%d", rc);
     }
@@ -928,8 +959,14 @@ extern "C" int32_t aicpu_execute(Runtime *runtime) {
     // The finalizer publishes cleanup eligibility only after runtime destruction.
     if (g_aicpu_executor.completion_gate_.claim_cleanup()) {
         LOG_INFO("aicpu_execute: All threads finished, cleaning up");
-        g_aicpu_executor.deinit(runtime);
-        g_aicpu_executor.handoff_run_terminal();
+        {
+            AicpuLifecycleDetailScope phase(runtime, detail_thread, AicpuLifecycleDetailKind::Deinit);
+            g_aicpu_executor.deinit(runtime);
+        }
+        {
+            AicpuLifecycleDetailScope phase(runtime, detail_thread, AicpuLifecycleDetailKind::TerminalHandoff);
+            g_aicpu_executor.handoff_run_terminal();
+        }
     }
 
     if (runtime_rc != 0) {

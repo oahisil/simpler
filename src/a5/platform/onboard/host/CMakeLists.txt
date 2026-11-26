@@ -127,20 +127,22 @@ list(LENGTH HOST_RUNTIME_SOURCES NUM_HOST_RUNTIME_SOURCES)
 message(STATUS "Host runtime: ${NUM_HOST_RUNTIME_SOURCES} source files")
 message(VERBOSE "Host runtime sources: ${HOST_RUNTIME_SOURCES}")
 add_library(host_runtime SHARED ${HOST_RUNTIME_SOURCES})
-include("${CMAKE_CURRENT_SOURCE_DIR}/ccu_event_trigger.cmake")
-add_dependencies(host_runtime ccu_event_trigger)
+if(NOT SIMPLER_PLATFORM_A6)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/ccu_event_trigger.cmake")
+    add_dependencies(host_runtime ccu_event_trigger)
+    add_custom_command(TARGET host_runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CCU_EVENT_TRIGGER_ELF}"
+            "$<TARGET_FILE_DIR:host_runtime>/ccu_event_trigger.o"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/aicpu_cpu_topo_fallback.json"
+            "$<TARGET_FILE_DIR:host_runtime>/aicpu_cpu_topo_fallback.json"
+    )
+endif()
 include("${SIMPLER_CMAKE_DIR}/aicpu_topology_driver.cmake")
 simpler_configure_aicpu_topology_driver(host_runtime)
 include("${SIMPLER_CMAKE_DIR}/profiling_config.cmake")
 simpler_configure_profiling(host_runtime)
-add_custom_command(TARGET host_runtime POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CCU_EVENT_TRIGGER_ELF}"
-        "$<TARGET_FILE_DIR:host_runtime>/ccu_event_trigger.o"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/aicpu_cpu_topo_fallback.json"
-        "$<TARGET_FILE_DIR:host_runtime>/aicpu_cpu_topo_fallback.json"
-)
 
 # C++ standard (applied only to C++ files)
 set_target_properties(host_runtime PROPERTIES
@@ -164,11 +166,14 @@ if(NOT DEFINED SIMPLER_RUNTIME_NAME OR SIMPLER_RUNTIME_NAME STREQUAL "")
     message(FATAL_ERROR "host_runtime requires -DSIMPLER_RUNTIME_NAME=<runtime>")
 endif()
 target_compile_definitions(host_runtime PRIVATE
-    SIMPLER_PLATFORM_NAME="a5"
     SIMPLER_RUNTIME_NAME="${SIMPLER_RUNTIME_NAME}"
 )
 
-target_compile_definitions(host_runtime PRIVATE PTO_URMA_SUPPORTED)
+if(SIMPLER_PLATFORM_A6)
+    target_compile_definitions(host_runtime PRIVATE SIMPLER_PLATFORM_A6=1 SIMPLER_PLATFORM_NAME="a6")
+else()
+    target_compile_definitions(host_runtime PRIVATE PTO_URMA_SUPPORTED SIMPLER_PLATFORM_NAME="a5")
+endif()
 if(SIMPLER_ENABLE_PTO_RDMA_WORKSPACE)
     target_compile_definitions(host_runtime PRIVATE
         SIMPLER_ENABLE_PTO_RDMA_WORKSPACE=1

@@ -7,6 +7,8 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 // -----------------------------------------------------------------------------------------------------------
 // Packed-cache gather, dual KV rings, and sink-aware sparse attention.
+// A6: one C/V pair owns 32 heads, with 64 keys gathered by its sole vector.
+// Double the captured block count; retain the original token and partial slots.
 //
 // Deep pipeline:
 //   * 512 KiB L1: double-buffered Q [32, 384] and shared Q [32, 128] tails per
@@ -32,6 +34,26 @@
 using namespace pto;
 
 namespace {
+#if defined(__NPU_ARCH__) && __NPU_ARCH__ == 9201
+constexpr bool SINGLE_VECTOR = true;
+#else
+constexpr bool SINGLE_VECTOR = false;
+#endif
+constexpr int ARG_BALANCED = 12;
+// Unbalanced A6 uses two groups per worker. Balanced attention preserves each
+// captured worker's partial-buffer slots and processes both head halves on one group.
+__aicore__ inline int groups_per_worker(__gm__ int64_t* args) {
+    return SINGLE_VECTOR && !args[ARG_BALANCED] ? 2 : 1;
+}
+__aicore__ inline int work_blocks(__gm__ int64_t* args) {
+    return get_block_num(args) / groups_per_worker(args);
+}
+__aicore__ inline int work_block(__gm__ int64_t* args) {
+    return get_block_idx(args) / groups_per_worker(args);
+}
+__aicore__ inline int first_head_half(__gm__ int64_t* args) {
+    return SINGLE_VECTOR ? get_block_idx(args) % groups_per_worker(args) : get_sub_block_id(args);
+}
 template <typename T, int R, int C>
 using Vec = Tile<TileType::Vec, T, R, C>;
 template <typename T, int R, int C>
@@ -55,30 +77,31 @@ constexpr int ARG_TOKENS = 8;
 constexpr int ARG_HEADS = 9;
 constexpr int ARG_WINDOW_KEYS = 10;
 constexpr int ARG_COMPRESSED_KEYS = 11;
-constexpr int ARG_BALANCED = 12;
 constexpr int PARTIAL_STRIDE = 64 * (512 + 2);
 
 #if !defined(__CPU_SIM)
 __aicore__ inline __gm__ uint32_t* ready_flags(__gm__ int64_t* args) {
     return reinterpret_cast<__gm__ uint32_t*>(data<float>(args, ARG_PARTIALS) +
-        (int64_t)2 * get_block_num(args) * PARTIAL_STRIDE);
+        (int64_t)2 * work_blocks(args) * PARTIAL_STRIDE);
 }
 #endif
 
 
 constexpr int DIM = 512;
-constexpr int CUBE_HEADS = 64;
+constexpr int GLOBAL_HEADS = 64;
+constexpr int CUBE_HEADS = SINGLE_VECTOR ? 32 : 64;
 constexpr int VEC_HEADS = 32;
 constexpr int TILE_KEYS = 128;
 constexpr int KEY_HALF = 64;
-constexpr int VEC_KEYS = 32;
+constexpr int VEC_KEYS = SINGLE_VECTOR ? 64 : 32;
 constexpr int KEY_CHUNK = 64;
 constexpr int QK_CHUNKS = 8;
 constexpr int PV_CHUNKS = 8;
 constexpr int KV_SLOTS = 3;
 constexpr int RAW_SLOTS = 3;
-constexpr int NZ_SLOTS = 2;
+constexpr int NZ_SLOTS = VEC_KEYS / 16;
 constexpr int AIV_BANK = 16;
+constexpr auto OUTPUT_MODE = SINGLE_VECTOR ? AccToVecMode::SingleModeVec0 : AccToVecMode::DualModeSplitM;
 
 // Affine offsets avoid read-only tables outside the runtime-loaded text section.
 // L1 map: wide Q double slots plus one shared tail per head half.
@@ -97,7 +120,7 @@ constexpr int L1_SIZE = 524288;
 constexpr int PV_ACC_STRIDE = 16384;
 constexpr int QK_ACC_BASE = 131072;
 
-// UB map per AIV: 240 KiB used, 16 KiB free.
+// UB map per AIV: A5 uses 240 KiB; A6 extends raw/NZ slots to 325.375 KiB.
 constexpr int PV_CHANNEL_BYTES = 65536;
 constexpr int PV_ROW_HALF_BYTES = VEC_HEADS * 256 * sizeof(float);
 constexpr int SCORE_UB = 131072;
@@ -112,15 +135,15 @@ constexpr int SINK_UB = 157440;
 constexpr int FINAL_MAX_UB = 157568;
 // Raw slots use 32 packed rows with a 544-byte UB row stride.
 constexpr int RAW_UB = 157696;
-constexpr int RAW_STRIDE = 17408;
-constexpr int NZ_UB = 209920;
+constexpr int RAW_STRIDE = VEC_KEYS * 544;
+constexpr int NZ_UB = RAW_UB + RAW_SLOTS * RAW_STRIDE;
 constexpr int NZ_STRIDE = 17408;
-constexpr int GATHER_ID_UB = 244736;
+constexpr int GATHER_ID_UB = NZ_UB + NZ_SLOTS * NZ_STRIDE;
 constexpr int GATHER_ID_STRIDE = VEC_KEYS * sizeof(int32_t);
-constexpr int SOFTMAX_ID_UB = 245120;
-constexpr int FINAL_CORRECTION_UB = 245632;
-constexpr int UB_USED = 245760;
-constexpr int UB_SIZE = 262144;
+constexpr int SOFTMAX_ID_UB = GATHER_ID_UB + RAW_SLOTS * GATHER_ID_STRIDE;
+constexpr int FINAL_CORRECTION_UB = SOFTMAX_ID_UB + TILE_KEYS * sizeof(int32_t);
+constexpr int UB_USED = FINAL_CORRECTION_UB + VEC_HEADS * sizeof(float);
+constexpr int UB_SIZE = SINGLE_VECTOR ? 376 * 1024 : 262144;
 
 // Cross-core (intra-block) semaphores: AIC addresses the second AIV bank at id + 16.
 // A5 intra-block IDs are plain 4-bit semaphores: one counter per id, no separate
@@ -156,6 +179,11 @@ constexpr int EV_RAW2 = 4;
 constexpr int EV_NZ0 = 5;
 constexpr int EV_NZ1 = 6;
 constexpr int EV_P_STAGE = 7;
+// MTE3/V events are separate from the raw ring's MTE2/V events. Keep all
+// event IDs in [0,7]; channels use 0/1, NZ uses 5/6 (and 2/3 on A6), P uses 7.
+__aicore__ inline event_t nz_event(int chunk) {
+    return static_cast<event_t>(SINGLE_VECTOR && chunk >= 2 ? chunk : EV_NZ0 + chunk);
+}
 
 static_assert(L1_SIZE == 512 * 1024, "L1 map must cover the 512 KiB L1");
 static_assert((Q_WIDE_LOWER_BASE + Q_WIDE_STRIDE) + 24576 == Q_TAIL_LOWER, "lower wide Q must precede its tail");
@@ -165,8 +193,8 @@ static_assert(P_L1 + 16384 == KV_UPPER_BASE, "P must precede upper KV");
 static_assert((KV_UPPER_BASE + 2 * KV_STRIDE) + 65536 == Q_WIDE_UPPER_BASE, "upper KV must precede upper wide Q");
 static_assert((Q_WIDE_UPPER_BASE + Q_WIDE_STRIDE) + 24576 == Q_TAIL_UPPER, "upper wide Q must precede its tail");
 static_assert(Q_TAIL_UPPER + 8192 == L1_SIZE, "Q tail must close the exact 512 KiB map");
-static_assert(UB_USED == 240 * 1024, "UB map must use 240 KiB");
-static_assert(UB_USED + 16384 == UB_SIZE, "UB map must leave exactly 16 KiB free");
+static_assert(SINGLE_VECTOR || UB_USED == 240 * 1024, "A5 UB map must use 240 KiB");
+static_assert(UB_USED <= UB_SIZE, "UB map must fit the target vector core");
 static_assert(SCORE_UB + SCORE_BYTES == P_STAGING_UB, "score tile must precede P staging");
 static_assert(P_STAGING_UB + P_STAGING_BYTES == MAX_STATE_UB, "P staging must precede state slots");
 static_assert(ALPHA_STATE_UB + 2 * STATE_SLOT_STRIDE == SINK_UB, "alpha slots must precede sink");
@@ -208,7 +236,7 @@ using PVRightHalf = Right<KEY_HALF, KEY_CHUNK>;
 using PVRight = Right<TILE_KEYS, KEY_CHUNK>;
 using PVAcc = Acc<CUBE_HEADS, KEY_CHUNK>;
 using Score = Vec<float, VEC_HEADS, TILE_KEYS>;
-using Channel = Vec<float, CUBE_HEADS, 256>;
+using Channel = Vec<float, 2 * VEC_HEADS, 256>;
 using ChannelHalf = Vec<float, VEC_HEADS, 256>;
 using State = Vec<float, 1, VEC_HEADS>;
 using PStaging = Tile<TileType::Vec, bfloat16_t, VEC_HEADS, TILE_KEYS, BLayout::ColMajor, VEC_HEADS, TILE_KEYS,
@@ -225,7 +253,7 @@ __aicore__ inline int64_t row_stride(__gm__ int64_t* args, int index) {
 }
 
 __aicore__ inline int valid_heads_of(__gm__ int64_t* args) {
-    return args[ARG_HEADS] < CUBE_HEADS ? (int)args[ARG_HEADS] : CUBE_HEADS;
+    return args[ARG_HEADS] < GLOBAL_HEADS ? (int)args[ARG_HEADS] : GLOBAL_HEADS;
 }
 
 struct TileTask {
@@ -252,8 +280,8 @@ struct WorkPlan {
 
 template <int Parts, bool Balanced>
 __aicore__ inline WorkPlan work_plan(__gm__ int64_t* args) {
-    const int workers = get_block_num(args);
-    const int block = get_block_idx(args);
+    const int workers = work_blocks(args);
+    const int block = work_block(args);
     const int tokens = args[ARG_TOKENS];
     const int parts = Parts > 0 ? Parts : (args[ARG_WINDOW_KEYS] + args[ARG_COMPRESSED_KEYS]) / TILE_KEYS;
     WorkPlan plan;
@@ -301,23 +329,24 @@ __aicore__ inline TileTask make_task(__gm__ int64_t* args, const WorkPlan& plan,
 template <pipe_t Pipe>
 __aicore__ inline void signal_both(int flag) {
     set_intra_block(Pipe, flag);
-    set_intra_block(Pipe, flag + AIV_BANK);
+    if constexpr (!SINGLE_VECTOR) set_intra_block(Pipe, flag + AIV_BANK);
 }
 template <pipe_t Pipe>
 __aicore__ inline void wait_both(int flag) {
     wait_intra_block(Pipe, flag);
-    wait_intra_block(Pipe, flag + AIV_BANK);
+    if constexpr (!SINGLE_VECTOR) wait_intra_block(Pipe, flag + AIV_BANK);
 }
 
 template <int Width>
 __aicore__ inline void load_q_component(__gm__ int64_t* args, int token, int column, int lower_base,
-                                        int upper_base, int event) {
-    const int valid = valid_heads_of(args);
+                                        int upper_base, int event, int half) {
+    const int head = SINGLE_VECTOR ? half * VEC_HEADS : 0;
+    const int valid = SINGLE_VECTOR ? (valid_heads_of(args) > head ? valid_heads_of(args) - head : 0) : valid_heads_of(args);
     const int lower = valid < VEC_HEADS ? valid : VEC_HEADS;
     const int upper = valid > VEC_HEADS ? valid - VEC_HEADS : 0;
     using QShape = TileShape2D<bfloat16_t, DYNAMIC, Width>;
-    using QBase = BaseShape2D<bfloat16_t, CUBE_HEADS, DIM>;
-    __gm__ bfloat16_t* q = data<bfloat16_t>(args, ARG_QUERY) + (int64_t)token * row_stride(args, ARG_QUERY) + column;
+    using QBase = BaseShape2D<bfloat16_t, GLOBAL_HEADS, DIM>;
+    __gm__ bfloat16_t* q = data<bfloat16_t>(args, ARG_QUERY) + (int64_t)token * row_stride(args, ARG_QUERY) + column + head * DIM;
     wait_flag(PIPE_MTE1, PIPE_MTE2, static_cast<event_t>(event));
     if (lower > 0) {
         QLoad<Width> tile(lower);
@@ -325,7 +354,7 @@ __aicore__ inline void load_q_component(__gm__ int64_t* args, int token, int col
         GlobalTensor<bfloat16_t, QShape, QBase> tensor(q, QShape(lower, Width));
         TLOAD(tile, tensor);
     }
-    if (upper > 0) {
+    if (!SINGLE_VECTOR && upper > 0) {
         QLoad<Width> tile(upper);
         TASSIGN(tile, upper_base);
         GlobalTensor<bfloat16_t, QShape, QBase> tensor(q + (int64_t)VEC_HEADS * DIM, QShape(upper, Width));
@@ -333,11 +362,11 @@ __aicore__ inline void load_q_component(__gm__ int64_t* args, int token, int col
     }
     set_flag(PIPE_MTE2, PIPE_MTE1, static_cast<event_t>(event));
 }
-__aicore__ inline void load_q_wide(__gm__ int64_t* args, int query, int slot) {
-    load_q_component<384>(args, query, 0, (Q_WIDE_LOWER_BASE + slot * Q_WIDE_STRIDE), (Q_WIDE_UPPER_BASE + slot * Q_WIDE_STRIDE), slot);
+__aicore__ inline void load_q_wide(__gm__ int64_t* args, int query, int slot, int half) {
+    load_q_component<384>(args, query, 0, (Q_WIDE_LOWER_BASE + slot * Q_WIDE_STRIDE), (Q_WIDE_UPPER_BASE + slot * Q_WIDE_STRIDE), slot, half);
 }
-__aicore__ inline void load_q_tail(__gm__ int64_t* args, int query) {
-    load_q_component<128>(args, query, 384, Q_TAIL_LOWER, Q_TAIL_UPPER, EV_Q_TAIL);
+__aicore__ inline void load_q_tail(__gm__ int64_t* args, int query, int half) {
+    load_q_component<128>(args, query, 384, Q_TAIL_LOWER, Q_TAIL_UPPER, EV_Q_TAIL, half);
 }
 
 // Preserve the destination [64,64] pitch: TEXTRACT(Left<32,64>) would compact at dstStride=2.
@@ -360,7 +389,7 @@ __tf__ __aicore__ inline void store_qk_final(
     SetLoop3Para();
     auto output = (__ubuf__ float*)__cce_get_tile_ptr(dst);
     auto input = (__cc__ float*)__cce_get_tile_ptr(src);
-    constexpr uint8_t dual = GetDualDstCtl<Score, QKAcc, AccToVecMode::DualModeSplitM, QuantMode_t::NoQuant>();
+    constexpr uint8_t dual = GetDualDstCtl<Score, QKAcc, OUTPUT_MODE, QuantMode_t::NoQuant>();
     constexpr uint32_t stride = GetTmovAccDstStride<Score, QKAcc>();
     pto_copy_matrix_cc_to_ub(
         output, input, 0, TILE_KEYS, CUBE_HEADS, stride, CUBE_HEADS, dual, false, 0, 3,
@@ -393,12 +422,15 @@ __aicore__ inline void compute_qk(__gm__ int64_t* args, const TileTask& task) {
         wait_flag(PIPE_MTE2, PIPE_MTE1, static_cast<event_t>(EV_Q_TAIL));
     }
     wait_intra_block(PIPE_MTE1, FLAG_KV_READY + slot);
-    wait_intra_block(PIPE_MTE1, FLAG_KV_READY + slot + AIV_BANK);
+    if constexpr (!SINGLE_VECTOR) wait_intra_block(PIPE_MTE1, FLAG_KV_READY + slot + AIV_BANK);
     wait_flag(PIPE_FIX, PIPE_M, static_cast<event_t>(EV_FIX_QK));
     for (int chunk = 0; chunk < QK_CHUNKS; ++chunk) {
         const int stage = chunk & 3;
         wait_flag(PIPE_M, PIPE_MTE1, static_cast<event_t>(stage));
-        if (chunk < 6) {
+        if constexpr (SINGLE_VECTOR) {
+            if (chunk < 6) TEXTRACT(a[stage], wide_lo, 0, chunk * 64);
+            else TEXTRACT(a[stage], tail_lo, 0, (chunk - 6) * 64);
+        } else if (chunk < 6) {
             extract_qk_left_half(a[stage], wide_lo, 0, chunk);
             extract_qk_left_half(a[stage], wide_hi, 1, chunk);
         } else {
@@ -480,7 +512,7 @@ __aicore__ inline void compute_pv(__gm__ int64_t* args, const TileTask& task) {
             set_flag(PIPE_M, PIPE_MTE1, static_cast<event_t>((EV_L0B_BASE + stage)));
             if (index == 0) wait_both<PIPE_FIX>(FLAG_PV_FREE + group);
             get_buf(PIPE_FIX, accumulator_lock, false);
-            TINSERT<Channel, PVAcc, AccToVecMode::DualModeSplitM>(channel, acc[chunk], rows,
+            TINSERT<Channel, PVAcc, OUTPUT_MODE>(channel, acc[chunk], rows,
                                                                   index * KEY_CHUNK);
             rls_buf(PIPE_FIX, accumulator_lock, false);
         }
@@ -491,7 +523,7 @@ __aicore__ inline void compute_pv(__gm__ int64_t* args, const TileTask& task) {
 }
 
 template <int Parts, bool Balanced>
-__aicore__ inline void attend_cube(__gm__ int64_t* args) {
+__aicore__ inline void attend_cube(__gm__ int64_t* args, int half) {
     const WorkPlan plan = work_plan<Parts, Balanced>(args);
     const int queries = plan.queries;
     const int tiles = plan.tiles;
@@ -509,16 +541,16 @@ __aicore__ inline void attend_cube(__gm__ int64_t* args) {
     signal_both<PIPE_MTE1>(FLAG_P_FREE);
 
     // Prologue QK(0), then QK(next) before PV(current), including query boundaries.
-    load_q_wide(args, plan.first_token, 0);
-    load_q_tail(args, plan.first_token);
+    load_q_wide(args, plan.first_token, 0, half);
+    load_q_tail(args, plan.first_token, half);
     compute_qk(args, make_task<Parts, Balanced>(args, plan, 0));
     for (int ordinal = 0; ordinal < tiles; ++ordinal) {
         const TileTask task = make_task<Parts, Balanced>(args, plan, ordinal);
-        if (task.first && task.query + 1 < queries) load_q_wide(args, task.token + (Balanced ? 1 : plan.workers), (task.query + 1) & 1);
+        if (task.first && task.query + 1 < queries) load_q_wide(args, task.token + (Balanced ? 1 : plan.workers), (task.query + 1) & 1, half);
         if (!task.last) {
             compute_qk(args, make_task<Parts, Balanced>(args, plan, ordinal + 1));
         } else if (task.query + 1 < queries) {
-            load_q_tail(args, task.token + (Balanced ? 1 : plan.workers));
+            load_q_tail(args, task.token + (Balanced ? 1 : plan.workers), half);
             compute_qk(args, make_task<Parts, Balanced>(args, plan, ordinal + 1));
         }
         compute_pv(args, task);
@@ -600,7 +632,7 @@ __aicore__ inline void gather_rows(__gm__ uint8_t* cache, __gm__ const int32_t* 
 }
 
 __aicore__ inline void gather_half(__gm__ int64_t* args, const TileTask& task, int half) {
-    const int lane = get_sub_block_id(args);
+    const int lane = SINGLE_VECTOR ? 0 : get_sub_block_id(args);
     const int slot = (task.ordinal * 2 + half) % RAW_SLOTS;
     const int raw_base = RAW_UB + slot * RAW_STRIDE;
     const int column = task.part * TILE_KEYS + half * KEY_HALF + lane * VEC_KEYS;
@@ -621,22 +653,26 @@ __aicore__ inline void gather_half(__gm__ int64_t* args, const TileTask& task, i
 }
 
 __aicore__ inline void dequant_half(__gm__ int64_t* args, const TileTask& task, int half) {
-    const int lane = get_sub_block_id(args);
+    const int lane = SINGLE_VECTOR ? 0 : get_sub_block_id(args);
     const int ring = (task.ordinal * 2 + half) % RAW_SLOTS;
     const int raw_base = RAW_UB + ring * RAW_STRIDE;
     const int id_base = GATHER_ID_UB + ring * GATHER_ID_STRIDE;
     const int kv_slot = task.ordinal % KV_SLOTS;
     const int kv_base = half == 0 ? (KV_LOWER_BASE + kv_slot * KV_STRIDE) : (KV_UPPER_BASE + kv_slot * KV_STRIDE);
-    NzChunk nz[2];
+    NzChunk nz[NZ_SLOTS];
     TASSIGN(nz[0], NZ_UB + 0 * NZ_STRIDE);
     TASSIGN(nz[1], NZ_UB + 1 * NZ_STRIDE);
+    if constexpr (SINGLE_VECTOR) {
+        TASSIGN(nz[2], NZ_UB + 2 * NZ_STRIDE);
+        TASSIGN(nz[3], NZ_UB + 3 * NZ_STRIDE);
+    }
     wait_flag(PIPE_MTE2, PIPE_V, static_cast<event_t>((EV_RAW0 + ring)));
-    for (int chunk = 0; chunk < 2; ++chunk) {
+    for (int chunk = 0; chunk < NZ_SLOTS; ++chunk) {
         ChunkIds ids;
         Vec<uint8_t, 16, 544> packed_rows;
         TASSIGN(ids, id_base + chunk * 16 * (int)sizeof(int32_t));
         TASSIGN(packed_rows, raw_base + chunk * 16 * 544);
-        wait_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>((EV_NZ0 + chunk)));
+        wait_flag(PIPE_MTE3, PIPE_V, nz_event(chunk));
         if (task.compressed) {
             sparse_dequant::decode_nz<true, NzChunk, decltype(packed_rows), ChunkIds>(
                 nz[chunk].data(), packed_rows.data(), ids.data());
@@ -644,7 +680,7 @@ __aicore__ inline void dequant_half(__gm__ int64_t* args, const TileTask& task, 
             sparse_dequant::decode_nz<false, NzChunk, decltype(packed_rows), ChunkIds>(
                 nz[chunk].data(), packed_rows.data(), ids.data());
         }
-        set_flag(PIPE_V, PIPE_MTE3, static_cast<event_t>((EV_NZ0 + chunk)));
+        set_flag(PIPE_V, PIPE_MTE3, nz_event(chunk));
     }
     set_flag(PIPE_V, PIPE_MTE2, static_cast<event_t>((EV_RAW0 + ring)));
     Mat<KEY_HALF, DIM> kv;
@@ -652,15 +688,15 @@ __aicore__ inline void dequant_half(__gm__ int64_t* args, const TileTask& task, 
     // The KV slot free/ready handshake is per (slot, tile), not per half: the caller
     // waits FLAG_KV_FREE once before the two half inserts and publishes
     // FLAG_KV_READY once after both, so the AIC sees a whole 128-key slot.
-    for (int chunk = 0; chunk < 2; ++chunk) {
-        wait_flag(PIPE_V, PIPE_MTE3, static_cast<event_t>((EV_NZ0 + chunk)));
+    for (int chunk = 0; chunk < NZ_SLOTS; ++chunk) {
+        wait_flag(PIPE_V, PIPE_MTE3, nz_event(chunk));
         TINSERT(kv, nz[chunk], lane * VEC_KEYS + chunk * 16, 0);
-        set_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>((EV_NZ0 + chunk)));
+        set_flag(PIPE_MTE3, PIPE_V, nz_event(chunk));
     }
 }
 
 __aicore__ inline void softmax_publish(__gm__ int64_t* args, const TileTask& task, int tick) {
-    const int lane = get_sub_block_id(args);
+    const int lane = SINGLE_VECTOR ? 0 : get_sub_block_id(args);
     const int column = task.compressed ? task.part * TILE_KEYS - args[ARG_WINDOW_KEYS] : task.part * TILE_KEYS;
     const int source = task.compressed ? ARG_COMPRESSED_INDICES : ARG_WINDOW_INDICES;
     SoftmaxIds ids;
@@ -703,17 +739,17 @@ __aicore__ inline void softmax_publish(__gm__ int64_t* args, const TileTask& tas
     set_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>(EV_P_STAGE));
 }
 
-__aicore__ inline void store_channel(__gm__ int64_t* args, const TileTask& task, int channel) {
+__aicore__ inline void store_channel(__gm__ int64_t* args, const TileTask& task, int channel, int half) {
     set_flag(PIPE_V, PIPE_MTE3, static_cast<event_t>(channel));
     wait_flag(PIPE_V, PIPE_MTE3, static_cast<event_t>(channel));
     const int valid = valid_heads_of(args);
-    const int head = get_sub_block_id(args) * VEC_HEADS;
+    const int head = half * VEC_HEADS;
     const int valid_local = valid > head ? (valid - head < VEC_HEADS ? valid - head : VEC_HEADS) : 0;
     if (valid_local > 0) {
         Tile<TileType::Vec, bfloat16_t, VEC_HEADS, 256, BLayout::RowMajor, DYNAMIC, 256> active(valid_local);
         TASSIGN(active, channel * PV_CHANNEL_BYTES + PV_ROW_HALF_BYTES);
         using OutShape = TileShape2D<bfloat16_t, DYNAMIC, 256>;
-        using OutBase = BaseShape2D<bfloat16_t, CUBE_HEADS, DIM>;
+        using OutBase = BaseShape2D<bfloat16_t, GLOBAL_HEADS, DIM>;
         __gm__ bfloat16_t* out = data<bfloat16_t>(args, ARG_OUTPUT) +
                                 (int64_t)task.token * row_stride(args, ARG_OUTPUT) + (int64_t)head * DIM +
                                 channel * 256;
@@ -727,18 +763,18 @@ __aicore__ inline void store_channel(__gm__ int64_t* args, const TileTask& task,
 
 __aicore__ inline void store_partial_channel(
     __gm__ int64_t* args, const TileTask& task, int channel, ChannelHalf& acc,
-    State& maximum, State& denominator) {
-    const int head = get_sub_block_id(args) * VEC_HEADS;
+    State& maximum, State& denominator, int half) {
+    const int head = half * VEC_HEADS;
     auto base = data<float>(args, ARG_PARTIALS) + (int64_t)task.partial_slot * PARTIAL_STRIDE;
     set_flag(PIPE_V, PIPE_MTE3, static_cast<event_t>(channel));
     wait_flag(PIPE_V, PIPE_MTE3, static_cast<event_t>(channel));
     using Shape = TileShape2D<float, VEC_HEADS, 256>;
-    using Base = BaseShape2D<float, CUBE_HEADS, DIM>;
+    using Base = BaseShape2D<float, GLOBAL_HEADS, DIM>;
     GlobalTensor<float, Shape, Base> numerator(base + head * DIM + channel * 256);
     TSTORE(numerator, acc);
     if (channel == 0) {
-        GM<float, 1, VEC_HEADS> max_gm(base + CUBE_HEADS * DIM + head);
-        GM<float, 1, VEC_HEADS> den_gm(base + CUBE_HEADS * (DIM + 1) + head);
+        GM<float, 1, VEC_HEADS> max_gm(base + GLOBAL_HEADS * DIM + head);
+        GM<float, 1, VEC_HEADS> den_gm(base + GLOBAL_HEADS * (DIM + 1) + head);
         TSTORE(max_gm, maximum);
         TSTORE(den_gm, denominator);
     }
@@ -748,12 +784,11 @@ __aicore__ inline void store_partial_channel(
     if (channel == 1 && task.partial_slot % 2 == 0) {
         // Publish the leading fragment after both numerator channels and statistics.
         pipe_barrier(PIPE_ALL);
-        const int half = get_sub_block_id(args);
         st_dev(uint32_t(1), ready_flags(args) + task.partial_slot + half, 0);
     }
 }
 
-__aicore__ inline void update_pv(__gm__ int64_t* args, const TileTask& task, int tick) {
+__aicore__ inline void update_pv(__gm__ int64_t* args, const TileTask& task, int tick, int half) {
     const int alpha_slot = (tick - 1) & 1;
     State maximum, denominator, sink, alpha, factor;
     TASSIGN(maximum, MAX_STATE_UB + task.query_slot * STATE_SLOT_STRIDE);
@@ -775,7 +810,7 @@ __aicore__ inline void update_pv(__gm__ int64_t* args, const TileTask& task, int
             if (!task.first) {
                 sparse_softmax::accumulate<ChannelHalf, State>(acc.data(), acc.data(), partial.data(), alpha.data());
             }
-            store_partial_channel(args, task, channel, acc, maximum, denominator);
+            store_partial_channel(args, task, channel, acc, maximum, denominator, half);
         } else if (task.last) {
             if (task.first) {
                 sparse_softmax::finish<true, ResultBf16, ChannelHalf, State>(
@@ -784,7 +819,7 @@ __aicore__ inline void update_pv(__gm__ int64_t* args, const TileTask& task, int
                 sparse_softmax::finish<false, ResultBf16, ChannelHalf, State>(
                     result.data(), acc.data(), partial.data(), alpha.data(), factor.data());
             }
-            store_channel(args, task, channel);
+            store_channel(args, task, channel, half);
         } else {
             if (!task.first) {
                 sparse_softmax::accumulate<ChannelHalf, State>(acc.data(), acc.data(), partial.data(), alpha.data());
@@ -794,8 +829,8 @@ __aicore__ inline void update_pv(__gm__ int64_t* args, const TileTask& task, int
     }
 }
 
-__aicore__ inline void load_sink(__gm__ int64_t* args) {
-    const int head = get_sub_block_id(args) * VEC_HEADS;
+__aicore__ inline void load_sink(__gm__ int64_t* args, int half) {
+    const int head = half * VEC_HEADS;
     const int valid = valid_heads_of(args);
     const int valid_local = valid > head ? (valid - head < VEC_HEADS ? valid - head : VEC_HEADS) : 0;
     State sink;
@@ -808,7 +843,7 @@ __aicore__ inline void load_sink(__gm__ int64_t* args) {
         if (valid_local > 0) {
             Tile<TileType::Vec, float, 1, VEC_HEADS, BLayout::RowMajor, 1, DYNAMIC> load(valid_local);
             TASSIGN(load, SINK_UB);
-            GlobalTensor<float, TileShape2D<float, 1, DYNAMIC>, BaseShape2D<float, 1, CUBE_HEADS>> sink_gm(
+            GlobalTensor<float, TileShape2D<float, 1, DYNAMIC>, BaseShape2D<float, 1, GLOBAL_HEADS>> sink_gm(
                 sink_data + head, TileShape2D<float, 1, DYNAMIC>(1, valid_local));
             TLOAD(load, sink_gm);
         }
@@ -826,7 +861,7 @@ __aicore__ inline void load_sink(__gm__ int64_t* args) {
 }
 
 template <int Parts, bool Balanced>
-__aicore__ inline void attend_vector(__gm__ int64_t* args) {
+__aicore__ inline void attend_vector(__gm__ int64_t* args, int half) {
     const WorkPlan plan = work_plan<Parts, Balanced>(args);
     const int queries = plan.queries;
     const int tiles = plan.tiles;
@@ -837,11 +872,15 @@ __aicore__ inline void attend_vector(__gm__ int64_t* args) {
     set_flag(PIPE_V, PIPE_MTE2, static_cast<event_t>(EV_RAW2));
     set_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>(EV_NZ0));
     set_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>(EV_NZ1));
+    if constexpr (SINGLE_VECTOR) {
+        set_flag(PIPE_MTE3, PIPE_V, nz_event(2));
+        set_flag(PIPE_MTE3, PIPE_V, nz_event(3));
+    }
     set_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>(EV_P_STAGE));
     set_intra_block(PIPE_V, FLAG_SCORE_FREE);
     set_intra_block(PIPE_V, FLAG_PV_FREE);
     set_intra_block(PIPE_V, FLAG_PV_FREE + 1);
-    load_sink(args);
+    load_sink(args, half);
     for (int tick = 0; tick < tiles + 4; ++tick) {
         const bool has_current = tick < tiles;
         const bool has_previous = tick >= 1 && tick - 1 < tiles;
@@ -856,7 +895,7 @@ __aicore__ inline void attend_vector(__gm__ int64_t* args) {
         if (has_current) gather_half(args, make_task<Parts, Balanced>(args, plan, tick), 1);
         if (has_previous) dequant_half(args, make_task<Parts, Balanced>(args, plan, tick - 1), 1);
         if (has_previous) set_intra_block(PIPE_MTE3, FLAG_KV_READY + (tick - 1) % KV_SLOTS);
-        if (has_update) update_pv(args, make_task<Parts, Balanced>(args, plan, tick - 4), tick);
+        if (has_update) update_pv(args, make_task<Parts, Balanced>(args, plan, tick - 4), tick, half);
     }
     // Retirement: consume exactly one credit per still-outstanding flag, no more.
     //   MTE3->V P staging : 1 seed  - 1 per softmax consume + 1 per softmax publish = 1
@@ -866,6 +905,10 @@ __aicore__ inline void attend_vector(__gm__ int64_t* args) {
     wait_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>(EV_P_STAGE));
     wait_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>(EV_NZ0));
     wait_flag(PIPE_MTE3, PIPE_V, static_cast<event_t>(EV_NZ1));
+    if constexpr (SINGLE_VECTOR) {
+        wait_flag(PIPE_MTE3, PIPE_V, nz_event(2));
+        wait_flag(PIPE_MTE3, PIPE_V, nz_event(3));
+    }
     // Same rule for the two rings whose free credits the AIC never consumes:
     //   V->MTE2 softmax ID : 1 seed  - 1 per softmax acquire + 1 per softmax publish = 1
     //   V->MTE2 RAW0/1/2   : 3 seeds - 1 per gather acquire  + 1 per dequant publish = 3
@@ -980,43 +1023,50 @@ extern "C" __aicore__ void kernel_entry(__gm__ int64_t* args) {
         simulate_attention(args);
     }
 #endif
-#if defined(__DAV_CUBE__) && !defined(__CPU_SIM)
-    const uint64_t saved_ctrl = get_ctrl();
+#if !defined(__CPU_SIM)
     const int parts = (args[ARG_WINDOW_KEYS] + args[ARG_COMPRESSED_KEYS]) / TILE_KEYS;
-    if (args[ARG_BALANCED]) {
-        if (parts == 5) attend_cube<5, true>(args);
-        else attend_cube<0, true>(args);
-    } else {
-        if (parts == 5) attend_cube<5, false>(args);
-        else if (parts == 1) attend_cube<1, false>(args);
-        else attend_cube<0, false>(args);
+    const bool balanced = args[ARG_BALANCED];
+    const int first = first_head_half(args);
+    const int passes = SINGLE_VECTOR && balanced ? 2 : 1;
+#if defined(__DAV_CUBE__)
+    const uint64_t saved_ctrl = get_ctrl();
+    for (int half = first; half < first + passes; ++half) {
+        if (balanced) {
+            if (parts == 5) attend_cube<5, true>(args, half);
+            else attend_cube<0, true>(args, half);
+        } else {
+            if (parts == 5) attend_cube<5, false>(args, half);
+            else if (parts == 1) attend_cube<1, false>(args, half);
+            else attend_cube<0, false>(args, half);
+        }
     }
     set_ctrl(saved_ctrl);
-#elif defined(__DAV_VEC__) && !defined(__CPU_SIM)
+#elif defined(__DAV_VEC__)
     set_mask_norm();
     set_vector_mask(-1, -1);
-    const int parts = (args[ARG_WINDOW_KEYS] + args[ARG_COMPRESSED_KEYS]) / TILE_KEYS;
-    if (args[ARG_BALANCED]) {
-        if (parts == 5) attend_vector<5, true>(args);
-        else attend_vector<0, true>(args);
-        const int boundary = get_block_idx(args) + 1;
-        const int workers = get_block_num(args);
-        const int cut = (int64_t)args[ARG_TOKENS] * parts * boundary / workers;
-        const int head = get_sub_block_id(args) * VEC_HEADS;
-        if (boundary < workers && cut % parts != 0 && head < args[ARG_HEADS]) {
-            auto ready = ready_flags(args) + 2 * boundary + get_sub_block_id(args);
-            while (ld_dev(ready, 0) != 1) {
-                for (int pause = 0; pause < 50; ++pause) asm volatile("nop");
+    for (int half = first; half < first + passes; ++half) {
+        if (balanced) {
+            if (parts == 5) attend_vector<5, true>(args, half);
+            else attend_vector<0, true>(args, half);
+            const int boundary = work_block(args) + 1;
+            const int workers = work_blocks(args);
+            const int cut = (int64_t)args[ARG_TOKENS] * parts * boundary / workers;
+            const int head = half * VEC_HEADS;
+            if (boundary < workers && cut % parts != 0 && head < args[ARG_HEADS]) {
+                auto ready = ready_flags(args) + 2 * boundary + half;
+                while (ld_dev(ready, 0) != 1) {
+                    for (int pause = 0; pause < 50; ++pause) asm volatile("nop");
+                }
+                sparse_merge::reduce(
+                    data<float>(args, ARG_PARTIALS), data<bfloat16_t>(args, ARG_OUTPUT), data<float>(args, ARG_SINK),
+                    row_stride(args, ARG_OUTPUT), row_stride(args, ARG_SINK), args[ARG_HEADS], boundary, head, cut / parts);
             }
-            // Main-loop users are drained; the reducer reuses their UB storage.
-            sparse_merge::reduce(
-                data<float>(args, ARG_PARTIALS), data<bfloat16_t>(args, ARG_OUTPUT), data<float>(args, ARG_SINK),
-                row_stride(args, ARG_OUTPUT), row_stride(args, ARG_SINK), args[ARG_HEADS], boundary, head, cut / parts);
+        } else {
+            if (parts == 5) attend_vector<5, false>(args, half);
+            else if (parts == 1) attend_vector<1, false>(args, half);
+            else attend_vector<0, false>(args, half);
         }
-    } else {
-        if (parts == 5) attend_vector<5, false>(args);
-        else if (parts == 1) attend_vector<1, false>(args);
-        else attend_vector<0, false>(args);
     }
+#endif
 #endif
 }

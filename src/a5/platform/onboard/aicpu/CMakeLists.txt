@@ -14,6 +14,10 @@ cmake_minimum_required(VERSION 3.16.3)
 
 project(aicpu_kernel LANGUAGES C CXX)
 
+if(SIMPLER_PLATFORM_A6)
+    add_compile_definitions(SIMPLER_PLATFORM_A6=1)
+endif()
+
 # Build complete include list
 set(CMAKE_CUSTOM_INCLUDE_DIRS "")
 list(APPEND CMAKE_CUSTOM_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../../include")

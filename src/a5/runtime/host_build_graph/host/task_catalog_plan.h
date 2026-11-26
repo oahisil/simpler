@@ -430,7 +430,7 @@ inline void scheduler_plan_terminal_mix_calls(
     for (unsigned i = 0; i < 3; ++i) {
         const auto &task = metadata[first[i]];
         const bool mix = i != 0;
-        const LaneMask lanes = mix ? LaneMask{true, true, true} : LaneMask::aiv0();
+        const LaneMask lanes = mix ? scheduler_cluster_lanes() : LaneMask::aiv0();
         if (task.active_mask != lanes || !scheduler_task_has_fixed_owners(task.flags) ||
             scheduler_task_requires_sync_start(task.flags) || scheduler_task_has_predicate(task.flags) ||
             task.logical_block_num != catalog.cluster_count * (mix ? 1 : PLATFORM_AIV_CORES_PER_BLOCKDIM))

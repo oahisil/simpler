@@ -26,6 +26,16 @@ def _execution_targets(platform):
 class TestRuntimeBuilderDiscovery:
     """Test runtime discovery from src/runtime/ subdirectories."""
 
+    @patch("simpler_setup.runtime_builder.RuntimeCompiler")
+    def test_a6_discovers_only_hbg_in_shared_source_tree(self, _compiler):
+        from simpler_setup.platform_info import default_build_runtimes, to_platform  # noqa: PLC0415
+        from simpler_setup.runtime_builder import RuntimeBuilder  # noqa: PLC0415
+
+        platform = to_platform("a6", "onboard")
+        builder = RuntimeBuilder(platform)
+        assert builder.runtime_dir == builder.runtime_root / "src/a5/runtime"
+        assert builder.list_runtimes() == default_build_runtimes("a6") == ["host_build_graph"]
+
     def test_discovers_real_runtimes(self, default_test_platform):
         """RuntimeBuilder discovers host_build_graph from the real project tree."""
         from simpler_setup.runtime_builder import RuntimeBuilder  # noqa: PLC0415

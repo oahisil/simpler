@@ -349,9 +349,11 @@ commit — which names the byte count it asked for — rather than in the alloca
 
 ### 5.1 Mixed Tasks and Logical Blocks
 
-An active mask selects AIC, AIV0, and AIV1 lanes. `block_num` is a logical SPMD
-width and may exceed the physical device width when sync-start is not requested;
-the scheduler dispatches those blocks in waves.
+Task records reserve three logical slots, AIC, AIV0 and AIV1. A MIX block
+uses the physical lanes selected by its mask. An A5 cluster has all three
+lanes. An A6 cluster has AIC and AIV0. A pure vector block can run on any
+physical vector worker. The scheduler dispatches logical SPMD blocks in waves
+when `block_num` exceeds the physical width and sync-start is disabled.
 
 Before a slot is allocated or published, submission requires:
 
@@ -390,19 +392,20 @@ Host has already published those arguments and Calls.
 
 For MIX, AICPU clears a run-scoped INIT bitmap before publishing the worker
 contexts. After clearing its cluster's SSBUF and executing the publication
-barrier, AIV0 sets its cluster bit. AIC and AIV1 observe that bit and execute
+barrier, AIV0 sets its cluster bit. AIC and any AIV1 observe that bit and execute
 the receive barrier before using SSBUF. Each cluster's isolated 128-byte GM
 word tracks the subsequent DONE reports. Host seeds its INIT bit as the base
 for that accumulation. If the optional INIT bitmap is unavailable, AIV0
 publishes INIT through the GM word and its peers confirm it there. Graphs
-without MIX use the preseeded GM word. Each worker services bounded control-node scans and prepares its
-first execution. AIC and AIV1 then publish their respective DONE bits. Once
-AIV0 confirms both bits and completes its own fill, it sets its cluster bit in
-a run-scoped CntNotify. AICPU clears this word before publishing any worker
-context and opens the DMB launch gate after observing the full participation
-mask. Launches without a mapped word use the GM arrival count and final
-`bootstrap_complete` publication. A failed
-lane contributes no success, and no kernel may enter before this gate opens.
+without MIX use the preseeded GM word. Each worker services bounded control-node
+scans and prepares its first execution. AIC and any AIV1 then publish their DONE
+bits. After its own fill, AIV0 credits the cluster when the mask reaches 7 on A5
+(1C2V) or 3 on A6 (1C1V). With a mapped arrival word, it sets its cluster bit in
+the run-scoped CntNotify. AICPU clears this word before publishing any worker
+context and waits for the full participation mask. Launches without a mapped word
+use the GM arrival count and final `bootstrap_complete` publication. AICPU releases
+each worker through `DATA_MAIN_BASE` on A5 or `IPC0` on A6. A failed lane contributes
+no success, and no kernel may enter before this gate opens.
 
 ENTER, EXIT and inline control nodes use bounded scans rather than a ready inbox.
 A worker reads each producer's canonical gate and advances only a positive fanin
@@ -443,10 +446,10 @@ node identity. Flat graphs with zero deferred groups, zero device control
 nodes and no predicates are eligible for a local change to this order. For
 each wide SPMD task S, the Host estimates how many AICs and AIVs can run
 its blocks concurrently. For MIX, it caps the block count at the cluster count
-before multiplying by the number of compute lanes of each type. On 32 clusters,
+before multiplying by the number of compute lanes of each type. On 32 A5 clusters,
 a multi-wave 1C1V task can use at most 32 AIVs. A pure AIV task can use both
-vector workers per cluster, up to 64 AIVs. S may be pure or MIX and may request
-sync-start.
+vector workers per cluster, up to 64 AIVs. On 54 A6 clusters, both a pure AIV wave
+and a 1C1V MIX wave use up to 54 AIVs. S may be pure or MIX and may request sync-start.
 Each narrow task B considers only the next S needing at least half the workers
 on B's engine. An intervening MIX or sync-start task ends the search. If B
 and that nearest S fit together, B keeps its position and the search stops
@@ -502,17 +505,25 @@ claim and data checks. Fixed owners, MIX, predicates and sync-start split runs.
 A worker that owes a local execution services it at the usual cursor boundary.
 
 For an exact wave, Host marks the expanded task with `SCHEDULER_TASK_FIXED_OWNER`.
-A pure AIC block maps to its cluster index, and a pure AIV block maps to twice
-its cluster index plus its vector lane (0 or 1). A 1C1V or 1C2V block maps to
+The AIC worker owns the block at its cluster index. A vector worker owns block
+`cluster_index * vectors_per_cluster + vector_index`. A5 uses two vector
+workers per cluster and A6 uses one. A 1C1V or 1C2V block maps to
 the block assigned to its cluster, where AIV0 publishes the original active mask.
 For a full Cube + Vector MIX wave with a power-of-two cluster count of at least eight,
 clusters whose index has bit 1 set flip the high index bit to select their block.
-All other clusters use their own index. This applies with
-either sync_start setting. Fixed assignment satisfies cross-engine supply as
+All other clusters use their own index, including all 54 A6 clusters.
+This applies with either sync_start setting. Fixed assignment satisfies cross-engine supply as
 soon as the image is available. An owning core advances its own catalog only
 after binding its block or publishing its local MIX descriptor. The cluster
 floor, resource order, and actual fanin still guard execution. Per-task dynamic
 claim counters and the supply seal stay zero for these tasks.
+
+For a flat graph with no deferred groups, the Host can also prevalidate two
+terminal full-cluster MIX tasks after a full-width vector task. Each link must
+be the only live successor of the preceding task, and the last task must be
+the sole sink. All three tasks require fixed owners and disable sync-start.
+Each worker prebinds its two calls using the physical cluster mask, 7 on A5
+or 3 on A6. Other inputs to either MIX still gate execution.
 
 Each core has one ordinary self-claim slot and one MIX member slot. An
 ordinary claim fixes the slot and owner for one block. A MIX member accepts
@@ -607,7 +618,9 @@ Live run and capture/replay leases keep their pools throughout the retry.
 
 A5 Host requires all requested CntNotify
 slots to be mapped and 32-byte aligned before publishing the image. A missing
-slot or invalid mapping fails preparation. On CPU/sim the GM accountant waits for
+slot or invalid mapping fails preparation. A6 Host publishes a zero completion
+counter offset and the resident scheduler uses GM completion accounting.
+On A6 and CPU/sim the GM accountant waits for
 every active member's successful FIN and contributes the active lane count in
 one update. Both paths retire the bank only after the successful FIN check.
 
@@ -632,6 +645,7 @@ Host records the live nodes with no live consumer after control folding and
 Graph expansion. After bootstrap, AICPU observes each sink's existing ADD
 threshold, SET notification or GM completion state. A completed sink stays
 complete. All sinks must settle before EXIT, including any asynchronous debt.
+A6 observes GM completion gates for the sinks.
 Independent terminal branches are checked separately. Host-only graphs have
 an empty sink list and still go through bootstrap and worker retirement.
 

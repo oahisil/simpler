@@ -422,6 +422,22 @@ def stamp_worker(record, field):
     return record["worker_index"]
 
 
+def _validate_worker_status(worker, epoch):
+    index = worker["index"]
+    for field, expected in (
+        ("worker_index", index),
+        ("context_worker_index", index),
+        ("run_epoch", epoch),
+        ("error_flags", 0),
+        ("finished", 1),
+    ):
+        if worker[field] != expected:
+            _error(
+                f"worker {index} identity, error or terminal status is invalid: "
+                f"{field}={worker[field]}, expected {expected}"
+            )
+
+
 def audit_protocol_sequences(section):
     """Check producer terminal status and contiguous per-worker sequences, not full causality."""
     read_native_protocol(section)
@@ -431,15 +447,8 @@ def audit_protocol_sequences(section):
     workers = {row["index"]: row for row in section["workers"]}
     streams = {index: {} for index in workers}
     epoch = section["run_epoch"]
-    for index, worker in workers.items():
-        if (
-            worker["worker_index"] != index
-            or worker["context_worker_index"] != index
-            or worker["run_epoch"] != epoch
-            or worker["error_flags"] != 0
-            or worker["finished"] != 1
-        ):
-            _error(f"worker {index} identity, error or terminal status is invalid")
+    for worker in workers.values():
+        _validate_worker_status(worker, epoch)
     for record, kind, path in _event_records(section):
         worker = record["worker_index"]
         if worker not in workers or record["run_epoch"] != epoch:

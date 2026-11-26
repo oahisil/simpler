@@ -10,10 +10,22 @@
 
 using namespace mxfp8_projection;
 namespace {
+#if defined(__NPU_ARCH__) && __NPU_ARCH__ == 9201
+constexpr int PAIRED_VECTORS = 1;
+// 5120 output columns in 54 non-overlapping tiles.
+constexpr int MAIN_WIDTH = 96, FULL_COLUMNS = 52, TAIL_WIDTH = 64, COLUMNS = 54;
+#else
+constexpr int PAIRED_VECTORS = 2;
+constexpr int MAIN_WIDTH = 160, FULL_COLUMNS = 32, TAIL_WIDTH = 128, COLUMNS = 32;
+#endif
+static_assert(FULL_COLUMNS * MAIN_WIDTH + (COLUMNS - FULL_COLUMNS) * TAIL_WIDTH == 5120);
+__aicore__ inline int column_offset(int col) {
+    return col < FULL_COLUMNS ? col * MAIN_WIDTH : FULL_COLUMNS * MAIN_WIDTH + (col - FULL_COLUMNS) * TAIL_WIDTH;
+}
 template <typename T, int R, int C>
 using Vec = Tile<TileType::Vec, T, R, C>;
 template <int MT, int NT>
-using Raw = Vec<float, MT / 2, NT>;
+using Raw = Vec<float, MT / PAIRED_VECTORS, NT>;
 constexpr int PRELOAD_ROWS = 64;
 template <int NT>
 using Residual = Vec<float, 4 * PRELOAD_ROWS, NT>;  // Prefetched rows x four streams, used as output in place.
@@ -25,10 +37,13 @@ using PostRow = Tile<TileType::Vec, float, 1, 8, BLayout::RowMajor, 1, 4>;
 using ResMixRow = Vec<float, 1, 16>;
 constexpr int RAW_UB = 0;
 template <int NT>
-constexpr int ResidualUB = 64 * NT * sizeof(float);
+constexpr int ResidualUB = (128 / PAIRED_VECTORS) * NT * sizeof(float);
 constexpr int POST_UB = 245760;
 constexpr int RES_MIX_UB = 247808;
 constexpr int READY = 0, RELEASE = 1, FINISH = 2, STORE_DONE = 3, VEC_OFFSET = 16;
+static_assert(ResidualUB<MAIN_WIDTH> + PRELOAD_ROWS * 4 * MAIN_WIDTH * sizeof(float) <= POST_UB,
+              "Prefetched output rows overlap mHC coefficients");
+static_assert(TAIL_WIDTH <= MAIN_WIDTH);
 static_assert(RES_MIX_UB + 64 * 16 * 4 <= 262144, "UB capacity exceeded");
 #if defined(__CPU_SIM)
 using SimPipe = TPipe<0, Direction::DIR_C2V, 65536, 1, 2>;
@@ -42,7 +57,8 @@ __tf__ __aicore__ inline void move_valid_rows(
     typename AC<NT, MT>::TileDType __in__ src, uint16_t rows) {
     auto dst_addr = (__ubuf__ float*)__cce_get_tile_ptr(dst);
     auto src_addr = (__cc__ float*)__cce_get_tile_ptr(src);
-    constexpr auto mode = GetDualDstCtl<Raw<MT, NT>, AC<NT, MT>, AccToVecMode::DualModeSplitM,
+    constexpr auto transfer = PAIRED_VECTORS == 1 ? AccToVecMode::SingleModeVec0 : AccToVecMode::DualModeSplitM;
+    constexpr auto mode = GetDualDstCtl<Raw<MT, NT>, AC<NT, MT>, transfer,
                                        QuantMode_t::NoQuant>();
     SetLoop3Para();
     // MT is the physical L0C stride; rows is the even-rounded transfer extent.
@@ -66,22 +82,22 @@ struct PostOutput {
         TPUSH<SimPipe, AC<NT, MT>, TileSplitAxis::TILE_UP_DOWN_ODD>(pipe, acc);
 #else
         wait_intra_block(PIPE_FIX, RELEASE);
-        wait_intra_block(PIPE_FIX, RELEASE + VEC_OFFSET);
+        if constexpr (PAIRED_VECTORS == 2) wait_intra_block(PIPE_FIX, RELEASE + VEC_OFFSET);
         Raw<MT, NT> raw;
         TASSIGN(raw, RAW_UB);
         move_valid_rows<MT, NT>(raw.data(), acc.data(), (rows + 1) & ~1);
         set_intra_block(PIPE_FIX, READY);
-        set_intra_block(PIPE_FIX, READY + VEC_OFFSET);
+        if constexpr (PAIRED_VECTORS == 2) set_intra_block(PIPE_FIX, READY + VEC_OFFSET);
 #endif
     }
     __aicore__ inline void finish() {
 #if !defined(__CPU_SIM)
         wait_intra_block(PIPE_FIX, RELEASE);
-        wait_intra_block(PIPE_FIX, RELEASE + VEC_OFFSET);
+        if constexpr (PAIRED_VECTORS == 2) wait_intra_block(PIPE_FIX, RELEASE + VEC_OFFSET);
         wait_intra_block(PIPE_FIX, STORE_DONE);
-        wait_intra_block(PIPE_FIX, STORE_DONE + VEC_OFFSET);
+        if constexpr (PAIRED_VECTORS == 2) wait_intra_block(PIPE_FIX, STORE_DONE + VEC_OFFSET);
         set_intra_block(PIPE_FIX, FINISH);
-        set_intra_block(PIPE_FIX, FINISH + VEC_OFFSET);
+        if constexpr (PAIRED_VECTORS == 2) set_intra_block(PIPE_FIX, FINISH + VEC_OFFSET);
 #endif
     }
 };
@@ -181,13 +197,12 @@ __aicore__ inline void preload_row(__gm__ int64_t* args, int global_row, int n, 
 template <int MT, int NT, int NC>
 __aicore__ inline void vector_task(__gm__ int64_t* args, int task, PostMix& post, ResMix& res_mix) {
     const int active = args[8];
-    constexpr int COLUMNS = (5120 + NC - 1) / NC;
     const int row_group = task / COLUMNS * MT;
     const int group = active - row_group > MT ? MT : active - row_group;
-    const int half = (group + 1) / 2;
-    const int row = row_group + get_sub_block_id(args) * half;
-    const int n = task % COLUMNS * NC;
-    const int valid = active - row < 0 ? 0 : (active - row > half ? half : active - row);
+    const int rows_per_vector = (group + PAIRED_VECTORS - 1) / PAIRED_VECTORS;
+    const int row = row_group + (PAIRED_VECTORS == 1 ? 0 : get_sub_block_id(args) * rows_per_vector);
+    const int n = column_offset(task % COLUMNS);
+    const int valid = active - row < 0 ? 0 : (active - row > rows_per_vector ? rows_per_vector : active - row);
     Raw<MT, NT> raw;
     Residual<NT> residual;
     TASSIGN(raw, RAW_UB);
@@ -237,8 +252,6 @@ template <int MT, int NC>
 __aicore__ inline void vector_entry(__gm__ int64_t* args) {
     const int active = args[8];
     const int workers = get_block_num(args);
-    constexpr int COLUMNS = (5120 + NC - 1) / NC;
-    constexpr int FULL_COLUMNS = 5120 / NC;
     const int tasks = ((active + MT - 1) / MT) * COLUMNS;
     PostMix post;
     ResMix res_mix;
@@ -252,7 +265,7 @@ __aicore__ inline void vector_entry(__gm__ int64_t* args) {
         if (task % COLUMNS < FULL_COLUMNS) {
             vector_task<MT, NC, NC>(args, task, post, res_mix);
         } else {
-            vector_task<MT, 128, NC>(args, task, post, res_mix);
+            vector_task<MT, TAIL_WIDTH, NC>(args, task, post, res_mix);
         }
     }
     wait_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID0);
@@ -299,20 +312,18 @@ template <int MT, int NC>
 __aicore__ inline void kernel_entry_m(__gm__ int64_t* args) {
     const int active = args[8];
     const int workers = get_block_num(args);
-    constexpr int COLUMNS = (5120 + NC - 1) / NC;
-    constexpr int FULL_COLUMNS = 5120 / NC;
     const int tasks = ((active + MT - 1) / MT) * COLUMNS;
 #if defined(__DAV_CUBE__)
     PostOutput<MT> emit;
     for (int task = get_block_idx(args); task < tasks; task += workers) {
         const int row = task / COLUMNS * MT;
         const int column = task % COLUMNS;
-        const int n = column * NC;
+        const int n = column_offset(column);
         const int rows = active - row > MT ? MT : active - row;
         if (column < FULL_COLUMNS) {
             project_group<NC>(args, row, n, rows);
         } else {
-            project_group<128>(args, row, n, rows);
+            project_group<TAIL_WIDTH>(args, row, n, rows);
         }
     }
     emit.finish();
@@ -323,5 +334,5 @@ __aicore__ inline void kernel_entry_m(__gm__ int64_t* args) {
 }  // namespace
 
 extern "C" __aicore__ void kernel_entry(__gm__ int64_t* args) {
-    kernel_entry_m<128, 160>(args);
+    kernel_entry_m<128, MAIN_WIDTH>(args);
 }

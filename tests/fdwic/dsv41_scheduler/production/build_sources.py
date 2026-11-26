@@ -96,7 +96,7 @@ def validate_device_image(data: bytes) -> None:
         raise ValueError("VPTO linked image requires a nonempty .text section")
 
 
-def compile_vector_functions(compiler, source, includes, helpers):
+def compile_vector_functions(compiler, source, includes, helpers, vf_flags=VF_FLAGS):
     toolchain = compiler.ccec
     bisheng = Path(toolchain.cxx_path).with_name("bisheng")
     with tempfile.TemporaryDirectory() as tmp:
@@ -118,7 +118,7 @@ def compile_vector_functions(compiler, source, includes, helpers):
         objects = []
         for i, helper in enumerate(helpers):
             obj = directory / f"helper{i}.o"
-            subprocess.run([bisheng, *VF_FLAGS, "-c", "-x", "ir", helper, "-o", obj], check=True)
+            subprocess.run([bisheng, *vf_flags, "-c", "-x", "ir", helper, "-o", obj], check=True)
             objects.append(obj)
         order, elf = directory / "order.txt", directory / "kernel.elf"
         order.write_text("kernel_entry\n")
@@ -256,7 +256,7 @@ def build(flavor, output, tools, pto, jobs, runtime):
         signature = kernel["signature"]
         rows.append(
             f"{kernel['func_id']} {len(signature)} {' '.join(map(str, signature))} "
-            + json.dumps(str(output / record["registration_file"]))
+            + json.dumps(str(output / record["registration_file"]), ensure_ascii=False)
         )
     signature = manifest["entry_signature"]
     (output / "kernels.txt").write_text(

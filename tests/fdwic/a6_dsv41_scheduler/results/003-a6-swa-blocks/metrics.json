@@ -1,0 +1,94 @@
+{
+  "stage": "003-a6-swa-blocks",
+  "device_measurements": "measured",
+  "fixture_sha256": "a25b3c4241ac4a8d46e0f3103e2f0c4bad57d268abacb5f73d478b8ba7291dcf",
+  "a5": {
+    "executions": 578,
+    "plan_sha256": "2c891ce643f4903a1c7ba8dc2ef9640bf9f6bca16f6b9119ba18d4870e3cf645",
+    "callable_sha256": "4a2298f7c0d18cf5ca0f2f367b126f5b07875f6b07c1da6415f0bdacf938a646",
+    "matches_stage_001": true
+  },
+  "a6": {
+    "default": "quant54",
+    "profiles": {
+      "merge-baseline": {
+        "executions": 570,
+        "l0_kernel_window_us": 328.139,
+        "l0_device_wall_us": 414.771,
+        "reference_stage": "002",
+        "reference_commit": "0d76a7d",
+        "l0_before_us": 52.377,
+        "l0_after_us": 34.255
+      },
+      "quant54": {
+        "executions": 560,
+        "l0_kernel_window_us": null,
+        "l0_device_wall_us": null
+      },
+      "quant54-oa54": {
+        "executions": 604,
+        "l0_kernel_window_us": 319.06,
+        "l0_device_wall_us": 406.69,
+        "l0_before_us": 53.21,
+        "l0_after_us": 34.42,
+        "l0_above_l1_bound_percent": 53.98,
+        "commit": "f1ad55d",
+        "date": "2026-11-20",
+        "device": "A6",
+        "logical_device": 0,
+        "cann": "9.3.0",
+        "warmup": 1,
+        "rounds": 10,
+        "checked_writable_buffers": 30,
+        "l1": {
+          "sync_bound_us": 207.21,
+          "all_optimal": true,
+          "quantum_ns": 100,
+          "round_bounds_us": [
+            218.1,
+            209.5,
+            206.9,
+            208.5,
+            207.6,
+            208.7,
+            206.3,
+            202.4,
+            201.2,
+            202.9
+          ]
+        },
+        "l3_mean_us": {
+          "before": 176.81,
+          "swimlane_init": 98.57,
+          "handshake": 8.643,
+          "bootstrap_wait": 46.192,
+          "kernel_window": 634.772,
+          "after": 370.105,
+          "exit_wait": 55.726,
+          "swimlane_collect": 288.007,
+          "device_wall": 1181.688,
+          "t17_kernel_span": 32.708,
+          "t20_kernel_span": 62.02
+        },
+        "l3_representative_run": {
+          "round": 1,
+          "device_wall_us": 1170.026,
+          "executions": 604
+        }
+      }
+    },
+    "identical_callables_across_profiles": true,
+    "benchmark_profile": "quant54-oa54",
+    "migration_baseline": {
+      "stage": "00",
+      "commit": "9161810",
+      "executions": 570,
+      "l0_kernel_window_us": 370.307,
+      "l0_device_wall_us": 463.159,
+      "l3_mean_us": {
+        "t17_kernel_span": 65.093,
+        "t20_kernel_span": 39.725
+      }
+    }
+  }
+}

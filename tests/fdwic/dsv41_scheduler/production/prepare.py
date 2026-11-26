@@ -32,9 +32,19 @@ def main():
     parser.add_argument(
         "--build-dir", type=Path, default=Path(os.environ.get("DSV41_BUILD_DIR", ROOT / "build/portable"))
     )
+    parser.add_argument(
+        "--runner",
+        type=Path,
+        default=os.environ.get("DSV41_RUNNER"),
+        help="Native runner used for capture, repacking and materialization",
+    )
     parser.add_argument("--flavor", choices=("all", "pypto_lib_latest", "synthetic"), default="all")
+    parser.add_argument("--native-moe-bundle", type=Path, help="Reuse an existing compatible native MoE bundle")
     parser.add_argument("--runtime", choices=("host_build_graph", "percounter"), default="host_build_graph")
+    parser.add_argument("--case", choices=["swa"], help="Prepare only the selected SWA slice")
     args = parser.parse_args()
+    if args.case and args.flavor == "synthetic":
+        parser.error("--case selects a model case and cannot be used with --flavor synthetic")
     output, build, runtime = args.output.resolve(), args.build_dir.resolve(), args.runtime_dir.resolve()
     runtime_files = (
         f"{args.runtime}/libhost_runtime.so",
@@ -51,11 +61,14 @@ def main():
         except ValueError as exc:
             parser.error(str(exc))
     output.mkdir(parents=True, exist_ok=False)
-    runner = build / "host/native-runner"
-    (output / "runtime.json").write_text(json.dumps({"path": str(runtime), "runtime": args.runtime}, indent=2) + "\n")
+    runner = (args.runner or build / "host/native-runner").resolve()
+    (output / "runtime.json").write_text(
+        json.dumps({"path": str(runtime), "runtime": args.runtime, "runner": str(runner)}, indent=2) + "\n"
+    )
     if args.flavor in ("all", "pypto_lib_latest"):
-        prepare_model_cases(output, build, runtime, args.runtime)
-    if args.flavor in ("all", "synthetic"):
+        case_names = (args.case,) if args.case else MODEL_CASES
+        prepare_model_cases(output, build, runtime, args.runtime, args.native_moe_bundle, case_names, runner)
+    if not args.case and args.flavor in ("all", "synthetic"):
         build_bundle(output / "cases" / FULL_WAVE, args.runtime, runner)
         variants = output / "diagnostics" / "mpmd_diamond"
         build_diamond(variants, runner, args.runtime, ROOT.parents[2] / "build/pto-isa")
@@ -63,8 +76,8 @@ def main():
     print(f"Prepared cases: {output / 'cases'}")
 
 
-def prepare_model_cases(output, build, runtime, runtime_name):
-    env = {**os.environ, "DSV41_RUNNER": str(build / "host/native-runner")}
+def prepare_model_cases(output, build, runtime, runtime_name, native_moe_bundle, case_names, runner):
+    env = {**os.environ, "DSV41_RUNNER": str(runner)}
     flavor = "pypto_lib_latest"
     bundle = build / "forward" / flavor
     capture = output / "capture" / flavor
@@ -83,7 +96,16 @@ def prepare_model_cases(output, build, runtime, runtime_name):
         env=env,
         check=True,
     )
-    cases = export(bundle, capture, flavor, output / "cases", build / "host", case_names=MODEL_CASES)
+    cases = export(
+        bundle,
+        capture,
+        flavor,
+        output / "cases",
+        build / "host",
+        native_moe_bundle,
+        case_names=case_names,
+        runner=runner,
+    )
     for case in cases:
         if json.loads((case / "case.json").read_text())["device_count"] == 1:
             materialize(case, runtime, output / "preparation" / flavor / case.name, env, runtime_name)

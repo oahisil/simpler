@@ -128,7 +128,7 @@ struct alignas(64) SchedulerProtocolBlockOwner {
     LaneMask active_mask;
     uint8_t flags;
     SchedulerProtocolStamp releases_observed;
-    uint64_t released_seq[3];
+    uint64_t released_seq[SUBTASK_SLOT_COUNT];
     uint32_t completion_worker;
     uint32_t completion_credits;
 };
@@ -148,7 +148,7 @@ struct alignas(64) SchedulerProtocolLaneTrace {
     uint32_t lane;
     LaneMask active_mask;
     uint32_t flags;
-    uint64_t arrived_seq[3];
+    uint64_t arrived_seq[SUBTASK_SLOT_COUNT];
     SchedulerProtocolStamp descriptor_ready;
     SchedulerProtocolStamp arrivals_observed;
     uint32_t logical_block_num;

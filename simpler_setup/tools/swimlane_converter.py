@@ -1239,6 +1239,13 @@ def _decode_perf_data(data, *, timeline_origin_ns=None, placement=None, source=N
     for record in lifecycle_raw:
         for field in lifecycle_cycle_fields:
             _track(int(record.get(field, 0)))
+        for interval in record.get("detail_intervals", []):
+            start = int(interval["start_cycles"])
+            end = int(interval["end_cycles"])
+            if start <= 0 or end < start:
+                raise ValueError("AICPU lifecycle detail has invalid interval bounds")
+            _track(start)
+            _track(end)
 
     if base_time_cycles is None:
         base_time_cycles = 0
@@ -1368,7 +1375,13 @@ def _decode_perf_data(data, *, timeline_origin_ns=None, placement=None, source=N
 
         if runtime_name != "host_build_graph" or level != 4 or scheduler_task_producer != "aicore":
             raise ValueError("native protocol requires an AICore-produced HBG L4 capture")
-        protocol_audit = audit_native_protocol(data["aicore_protocol"], tasks)
+        section = data["aicore_protocol"]
+        protocol_audit = audit_native_protocol(section, tasks)
+        # The audit joins each execution to its public task identity, including native Graph children.
+        public_ids = {n["node_ref"]: n["public_task_id"] for n in section.get("node_map", [])}
+        kernel_map = {public_ids.get(t["task_ref"], t["task_ref"]): t["kernel_ids"] for t in section["tasks"]}
+        for task in tasks:
+            task["func_id"] = kernel_map[task["task_id"]][task["subtask_slot"]]
 
     # Sorting by task_id alone would interleave two runs' executions of the same
     # task. Epoch leads so each run's tasks stay contiguous.
@@ -1428,6 +1441,15 @@ def _decode_perf_data(data, *, timeline_origin_ns=None, placement=None, source=N
             if cycles > 0:
                 converted[field.removesuffix("_cycles") + "_time_us"] = _to_us(cycles)
         converted["record_index"] = record_index
+        if "detail_intervals" in record:
+            converted["detail_intervals"] = [
+                {
+                    "name": interval["name"],
+                    "start_time_us": _to_us(int(interval["start_cycles"])),
+                    "end_time_us": _to_us(int(interval["end_cycles"])),
+                }
+                for interval in record["detail_intervals"]
+            ]
         aicpu_lifecycle_records.append(converted)
 
     host_device_uploads = []
@@ -2067,24 +2089,20 @@ def _append_dependency_flow_pair(  # noqa: PLR0913
     events.append(flow_f)
 
 
-def resolve_func_id_from_kernel_map(task_id, core_type, kernel_map):
+def resolve_func_id_from_kernel_map(task_id, core_type, kernel_map, subtask_slot=None):
     """Look up the active ``func_id`` for a TASK_TIMING record via dep_gen.
 
-    Picks the kernel_ids[3] subslot by record ``core_type``. Returns the
-    resolved func_id (>= 0) on a hit, or -1 if no usable subslot was found
-    (caller keeps the original -1 and emits the ``func_-1_(...)`` fallback
-    name). The choice for ``aiv`` prefers AIV0 ([1]) and falls back to AIV1
-    ([2]) — works for pure-AIV and MIX-with-single-AIV records; for MIX
-    records that span both AIVs the host swimlane record only tells us the
-    lane is "aiv", so the resolver may name an AIV1 lane after AIV0's
-    kernel. Acceptable trade-off until the host emits a lane-disambiguated
-    core_type ("aiv0" / "aiv1").
+    Use the execution identity's logical slot when available. Records with
+    only a core type resolve C to slot 0 and V to the first active V slot.
+    Return -1 if the selected slot is absent or inactive.
     """
     if kernel_map is None or task_id is None:
         return -1
     kids = kernel_map.get(int(task_id))
     if not kids:
         return -1
+    if subtask_slot is not None:
+        return kids[subtask_slot] if kids[subtask_slot] >= 0 else -1
     if core_type == "aic":
         return kids[0] if kids[0] >= 0 else -1
     # "aiv": prefer AIV0, fall back to AIV1.
@@ -2630,7 +2648,9 @@ def generate_chrome_trace_json(  # noqa: PLR0912, PLR0913, PLR0915
     if deps_kernel_map is not None:
         for task in tasks:
             if int(task["func_id"]) < 0:
-                resolved = resolve_func_id_from_kernel_map(task["task_id"], task.get("core_type"), deps_kernel_map)
+                resolved = resolve_func_id_from_kernel_map(
+                    task["task_id"], task.get("core_type"), deps_kernel_map, task.get("subtask_slot")
+                )
                 if resolved >= 0:
                     task["func_id"] = resolved
 
@@ -2679,6 +2699,21 @@ def generate_chrome_trace_json(  # noqa: PLR0912, PLR0913, PLR0915
                 identity["graph_shell_id"] = shell
             if "watermark" in record:
                 identity["watermark"] = record["watermark"]
+            for interval in record.get("detail_intervals", []):
+                start = float(interval["start_time_us"])
+                end = float(interval["end_time_us"])
+                events.append(
+                    {
+                        "args": identity,
+                        "cat": "aicpu_lifecycle",
+                        "name": interval["name"],
+                        "ph": "X",
+                        "pid": 6,
+                        "tid": tid,
+                        "ts": start,
+                        "dur": end - start,
+                    }
+                )
             for name, start_field, end_field in lifecycle_intervals:
                 start = float(record.get(start_field, 0.0))
                 end = float(record.get(end_field, 0.0))
@@ -4302,6 +4337,9 @@ Examples:
         "Directory input follows derived Host log paths in dispatch_identity.json, then legacy logs. "
         "A single capture with no matching logs remains unaligned; valid saved alignment needs no logs.",
     )
+    parser.add_argument(
+        "--device-only", action="store_true", help="Render one invocation on its device clock, excluding Host tracks."
+    )
     parser.add_argument("--publish-derived-host-logs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--rank-pid",
@@ -5820,6 +5858,8 @@ def _namespace_rank_trace(trace, rank, slack_ns):
 
 
 def _generate_l3_trace(args, root):  # noqa: PLR0912
+    if args.device_only:
+        raise ValueError("--device-only takes a single capture")
     if args.func_names or args.kernel_config or args.deps_json:
         raise ValueError("directory input auto-loads per-Rank name/dependency files; global overrides are not allowed")
 
@@ -6061,6 +6101,24 @@ def _convert_recorded_window(data, input_path, output_path):
     return 0
 
 
+def _read_single_invocation(path, args):
+    if not args.device_only:
+        raw, placement = _prepare_capture_clock_alignment(path, args.host_log)
+        return _decode_perf_data(raw, placement=placement)
+    if args.host_log:
+        raise ValueError("--device-only takes no Host log")
+    raw = json.loads(path.read_text())
+    if _is_recorded_window(raw):
+        raise ValueError("--device-only requires a single invocation")
+    raw.pop("host_orchestrator_phases", None)
+    raw.pop("host_device_uploads", None)
+    for field in ("host_capture", "orchestrator_source", "clock_alignment"):
+        raw["metadata"].pop(field, None)
+    data = _decode_perf_data(raw)
+    data.setdefault("timeline_metadata", {}).update(layout="device_relative", cross_domain_latency_available=False)
+    return data
+
+
 def main():
     args = _build_parser().parse_args()
 
@@ -6097,8 +6155,7 @@ def main():
             raise ValueError("--dispatch and --dispatch-id are only valid when input is a dfx_outputs directory")
         if args.verbose:
             print(f"Reading performance data from: {input_path}")
-        raw, placement = _prepare_capture_clock_alignment(input_path, args.host_log)
-        data = _decode_perf_data(raw, placement=placement)
+        data = _read_single_invocation(input_path, args)
         if (data.get("timeline_metadata") or {}).get("recorded_window"):
             if args.overhead or args.deps_json:
                 raise ValueError("recorded windows cannot derive dependency flows or invocation overhead")

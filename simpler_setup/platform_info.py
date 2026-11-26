@@ -22,13 +22,14 @@ PLATFORM_MAP: dict[str, tuple[str, str]] = {
     "a2a3": ("a2a3", "onboard"),
     "a2a3sim": ("a2a3", "sim"),
     "a5": ("a5", "onboard"),
+    "a6": ("a6", "onboard"),
     "a5sim": ("a5", "sim"),
     "wsesim": ("wse", "sim"),
 }
 
 _REVERSE_MAP: dict[tuple[str, str], str] = {v: k for k, v in PLATFORM_MAP.items()}
 
-ARCHS = ("a2a3", "a5", "wse")
+ARCHS = ("a2a3", "a5", "a6", "wse")
 TARGETS = ("host", "aicpu", "aicore")
 
 
@@ -55,12 +56,18 @@ def to_platform(arch: str, variant: str) -> str:
     return _REVERSE_MAP[key]
 
 
-def discover_runtimes(arch: str) -> list[str]:
+def runtime_source_arch(arch: str) -> str:
+    """A6 HBG shares its source tree with A5 and has its own artifact directory."""
+    return "a5" if arch == "a6" else arch
+
+
+def discover_runtimes(arch: str, *, root: Path | None = None) -> list[str]:
     """Return sorted list of runtime names that have a build_config.py."""
-    runtime_base = PROJECT_ROOT / "src" / arch / "runtime"
+    runtime_base = (PROJECT_ROOT if root is None else root) / "src" / runtime_source_arch(arch) / "runtime"
     if not runtime_base.is_dir():
         return []
-    return sorted(d.name for d in runtime_base.iterdir() if d.is_dir() and (d / "build_config.py").exists())
+    configs = runtime_base.glob("host_build_graph/build_config.py" if arch == "a6" else "*/build_config.py")
+    return sorted(config.parent.name for config in configs if config.is_file())
 
 
 def runtime_builds_by_default(arch: str, runtime: str) -> bool:
@@ -72,7 +79,7 @@ def runtime_builds_by_default(arch: str, runtime: str) -> bool:
     predates the marker is unaffected and a name with no config at all -- a
     caller's stand-in -- is taken at face value rather than silently dropped.
     """
-    config_path = PROJECT_ROOT / "src" / arch / "runtime" / runtime / "build_config.py"
+    config_path = PROJECT_ROOT / "src" / runtime_source_arch(arch) / "runtime" / runtime / "build_config.py"
     if not config_path.is_file():
         return True
     spec = importlib.util.spec_from_file_location("build_config", config_path)

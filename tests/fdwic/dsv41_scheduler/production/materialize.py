@@ -15,6 +15,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from device_start_gate import file_stamp, validate_runtime_gate
 from export_cases import link
 from topology import device_count
 
@@ -65,6 +66,25 @@ def finalize(bundle, capture):
     (bundle / "rank1.txt").unlink()
 
 
+def single_device_runtime(runtime, variant):
+    """The EP2 gate waits for two participants. Use its matching original for a local prefix."""
+    runtime = Path(runtime).resolve()
+    if not (runtime / variant / "device_start_gate.o").is_file():
+        return runtime
+    manifest = validate_runtime_gate(runtime, variant)
+    original = Path(manifest["source_runtime_dir"]).resolve()
+    components = [
+        f"a5/onboard/{variant}/{name}" for name in ("libhost_runtime.so", "libaicpu_kernel.so", "aicore_kernel.o")
+    ]
+    components.extend(["a5/dispatcher/libsimpler_aicpu_dispatcher.so", "pto_isa_build.json"])
+    for component in components:
+        record = manifest["original_binaries"][component]
+        path = original.parents[1] / component
+        if path.resolve() != Path(record["source"]) or file_stamp(path) != record["stamp"]:
+            raise ValueError(f"Original runtime changed after the two-rank capture gate was built: {component}")
+    return original
+
+
 def materialize(bundle, runtime, capture, env=None, runtime_name="host_build_graph"):
     device_count(bundle, materialize=True)
     case = json.loads((bundle / "case.json").read_text())
@@ -79,6 +99,7 @@ def materialize(bundle, runtime, capture, env=None, runtime_name="host_build_gra
         required and lines[3 + index].startswith("COMM ") for index, required in enumerate(detail["external_bytes"])
     )
     if not prefix_communicates:
+        runtime = single_device_runtime(runtime, runtime_name)
         lines[1] = "1 0"
         for index in range(int(lines[2])):
             if lines[3 + index].startswith("COMM "):

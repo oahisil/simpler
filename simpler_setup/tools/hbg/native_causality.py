@@ -102,7 +102,8 @@ class NativeAudit:
     def topology(self):
         count = self.raw["worker_count"]
         clusters = self.raw["cluster_count"]
-        require(count > 0 and count == clusters * 3, "incomplete worker topology")
+        require(clusters > 0 and count in (clusters * 2, clusters * 3), "incomplete worker topology")
+        lanes = count // clusters
         require(self.raw["active_worker_count"] == count, "inactive scheduler topology")
         cores = set()
         for index, worker in self.workers.items():
@@ -110,8 +111,10 @@ class NativeAudit:
             cluster = worker["cluster_index"]
             require(worker["core_id"] >= 0 and worker["core_id"] not in cores, "duplicate or unknown physical core")
             cores.add(worker["core_id"])
-            require(cluster < clusters and len(set(peers)) == 3 and index in peers, "invalid cluster membership")
-            for lane, peer in enumerate(peers):
+            require(all(peer == MAX for peer in peers[lanes:]), "unexpected inactive cluster worker")
+            active = peers[:lanes]
+            require(cluster < clusters and len(set(active)) == lanes and index in active, "invalid cluster membership")
+            for lane, peer in enumerate(active):
                 require(peer in self.workers, "cluster names an absent worker")
                 other = self.workers[peer]
                 require(
@@ -120,6 +123,15 @@ class NativeAudit:
                 require(other["core_type"] == int(lane != 0), "cluster lane has wrong core type")
             self.positions[index] = cluster, peers.index(index)
         require({w["cluster_index"] for w in self.workers.values()} == set(range(clusters)), "missing cluster")
+
+    def fixed_block(self, mask, cluster, lane):
+        clusters = self.raw["cluster_count"]
+        if mask in (2, 4):
+            vectors = self.raw["worker_count"] // clusters - 1
+            return cluster * vectors + lane - 1
+        if mask in (3, 5, 7) and clusters >= 8 and clusters & (clusters - 1) == 0 and cluster & 2:
+            return cluster ^ (clusters // 2)
+        return cluster
 
     def graph(self):
         if has_native_graph(self.raw):
@@ -131,6 +143,8 @@ class NativeAudit:
         trace_indices = set()
         for ref, task in sorted(self.tasks.items()):
             flags, mask, blocks = task["flags"], task["active_mask"], task["block_num"]
+            clusters = self.raw["cluster_count"]
+            positions = self.raw["worker_count"] - clusters if mask in (2, 4) else clusters
             deps = task["dependencies"]
             require(len(set(deps)) == len(deps) and all(0 <= dep < ref for dep in deps), "invalid frozen dependencies")
             require(
@@ -143,7 +157,7 @@ class NativeAudit:
                     flags & EXECUTABLE
                     and not flags & (INLINE | PREDICATE)
                     and mask in (1, 2, 3, 4, 5, 7)
-                    and blocks == self.raw["cluster_count"] * (2 if mask in (2, 4) else 1)
+                    and blocks == positions
                 ),
                 "fixed owners require an exact physical wave",
             )
@@ -172,8 +186,11 @@ class NativeAudit:
             active = bin(mask).count("1")
             require(0 < mask < 8 and 0 < blocks * active <= 32767, "invalid frozen task shape")
             require(bool(flags & MIX) == (active > 1) and bool(flags & SPMD) == (blocks > 1), "shape/flags mismatch")
+            require(
+                not flags & MIX or mask < 1 << (self.raw["worker_count"] // clusters),
+                "MIX requires an absent physical lane",
+            )
             if flags & SYNC:
-                positions = self.raw["cluster_count"] * (2 if mask in (2, 4) else 1)
                 require(1 < blocks <= positions, "sync_start distinct position capacity exceeded or N=1")
             require(not flags & PREDICATE or (active == blocks == 1), "unsupported cooperative predicate")
             for slot, kernel in enumerate(task["kernel_ids"]):
@@ -261,7 +278,7 @@ class NativeAudit:
             if not flags & EXECUTABLE or flags & INLINE:
                 mask = 0
             expected = [0] * 3
-            for lane in range(3):
+            for lane in range(self.raw["worker_count"] // self.raw["cluster_count"]):
                 if mask & (1 << lane):
                     expected[lane] = sync[lane] if flags & MIX else mix[lane]
                     if flags & MIX:
@@ -406,7 +423,7 @@ class NativeAudit:
             )
             if task["flags"] & FIXED_OWNER:
                 cluster, lane = self.positions[worker]
-                expected = 2 * cluster + lane - 1 if task["active_mask"] in (2, 4) else cluster
+                expected = self.fixed_block(task["active_mask"], cluster, lane)
                 require(block == expected, "fixed block executed by the wrong owner")
             require(
                 valid_source_index(
@@ -588,7 +605,11 @@ class NativeAudit:
             self.task_blocks[ref].append(block)
             if task["flags"] & MIX:
                 if task["flags"] & FIXED_OWNER:
-                    require(self.positions[worker] == (block_idx, 1), "fixed MIX published by the wrong proxy")
+                    cluster, lane = self.positions[worker]
+                    require(
+                        lane == 1 and self.fixed_block(task["active_mask"], cluster, lane) == block_idx,
+                        "fixed MIX published by the wrong proxy",
+                    )
                 continue
             require(
                 block["lanes"] == []

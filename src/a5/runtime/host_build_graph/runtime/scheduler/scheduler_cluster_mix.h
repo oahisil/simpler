@@ -92,7 +92,7 @@ scheduler_protocol_cluster_observe(__gm__ void *base, const SchedulerLocalState 
     lane->flags = metadata.flags;
     scheduler_lane_mask_store(lane->active_mask, group.active_mask);
     scheduler_lane_mask_store(lane->resource_mask, group.active_mask);
-    for (uint32_t peer = 0; peer < 3; ++peer) {
+    for (uint32_t peer = 0; peer < SUBTASK_SLOT_COUNT; ++peer) {
         lane->lane_subtasks[peer] = group.active_mask.has(static_cast<SubtaskSlot>(peer)) ? peer : UINT8_MAX;
     }
     scheduler_protocol_stamp(base, local, layout, &lane->descriptor_ready);
@@ -135,7 +135,7 @@ scheduler_protocol_cluster_all(__gm__ void *base, const SchedulerLocalState *loc
     if (stamp->sequence != 0) return;
     auto *values = releases ? record->owner.released_seq : lane->arrived_seq;
     const auto resources = group.active_mask;
-    for (uint32_t peer = 0; peer < 3; ++peer) {
+    for (uint32_t peer = 0; peer < SUBTASK_SLOT_COUNT; ++peer) {
         const bool observed = releases || group.requires_peer_order || peer == local->config.self_lane;
         values[peer] = observed && resources.has(static_cast<SubtaskSlot>(peer)) ? group.generation : 0;
     }

@@ -1,0 +1,487 @@
+{
+  "stage": "001-hbg-main-merge-swa",
+  "date": "2026-11-19",
+  "case": "swa",
+  "runtime": "host_build_graph",
+  "unit": "us",
+  "aggregation": "arithmetic_mean",
+  "warmup_rounds": 1,
+  "measured_rounds": 10,
+  "cards_per_run": 1,
+  "checked_writable_buffers": 30,
+  "paired_job": "task_20261119_164849_3638352117",
+  "device_model": "Ascend950DT",
+  "cann_version": "9.3.0",
+  "aic": 32,
+  "aiv": 64,
+  "common_a5_replay": {
+    "pto_isa_commit": "6065c782e05c730f1d264532cc3075c509d1da89",
+    "fixture_sha256": "a25b3c4241ac4a8d46e0f3103e2f0c4bad57d268abacb5f73d478b8ba7291dcf",
+    "callable_sha256": "4a2298f7c0d18cf5ca0f2f367b126f5b07875f6b07c1da6415f0bdacf938a646",
+    "plan_sha256": "2c891ce643f4903a1c7ba8dc2ef9640bf9f6bca16f6b9119ba18d4870e3cf645",
+    "runner_sha256": "44459caf9d73f0ecfd644fd4809ae820a1c42f0343b28080171fc31144aca548",
+    "tasks": 16,
+    "executions": 578
+  },
+  "baseline_source": "../00-baseline/metrics.json",
+  "baseline_a5": {
+    "l0": {
+      "commit": "536a65368",
+      "before_us": 59.971,
+      "aicore_window_us": 269.286,
+      "after_us": 42.552,
+      "device_wall_us": 371.809,
+      "host": {
+        "bind_us": 364.969,
+        "publish_image_us": 34.139,
+        "prepare_us": 14.363,
+        "call_us": 1464.013
+      }
+    },
+    "l1_sync_bound_us": 133.03
+  },
+  "a5": {
+    "main": {
+      "runtime_commit": "ea50c264ef494227bc7dd3843258d9d914679f0e",
+      "device": 3,
+      "runtime_sha256": {
+        "libsimpler_aicpu_dispatcher.so": "4693ff49df28b9ce426c13eb462a7ddd361f7b872629c82443992a4ba90572f8",
+        "libhost_runtime.so": "f8fd04f6b8a12b12842d8aa8675c0589bb092e82668041b30a561cfbb6003f28",
+        "libaicpu_kernel.so": "09659abccffb50330f5e395ba6b1a4992d4b68719158712133e792f713a59ec2",
+        "aicore_kernel.o": "e44599d40575ae5630dac77aaafe5ea1554c352231a70a72660f9fbaaad207e6"
+      },
+      "l0": {
+        "mean": {
+          "before_us": 55.833,
+          "aicore_window_us": 219.287,
+          "after_us": 33.595,
+          "device_wall_us": 308.715,
+          "host_call_us": 1608.763,
+          "host_bind_us": 734.098,
+          "host_publish_image_us": 49.147,
+          "host_prepare_us": 19.217
+        },
+        "samples": [
+          {
+            "round": 1,
+            "before_us": 55.972,
+            "aicore_window_us": 228.821,
+            "after_us": 33.285,
+            "device_wall_us": 318.078,
+            "host_call_us": 1077.02,
+            "host_bind_us": 349.04,
+            "host_publish_image_us": 39.22,
+            "host_prepare_us": 18.85
+          },
+          {
+            "round": 2,
+            "before_us": 52.714,
+            "aicore_window_us": 228.992,
+            "after_us": 33.844,
+            "device_wall_us": 315.55,
+            "host_call_us": 1003.87,
+            "host_bind_us": 315.43,
+            "host_publish_image_us": 32.98,
+            "host_prepare_us": 16.45
+          },
+          {
+            "round": 3,
+            "before_us": 54.621,
+            "aicore_window_us": 217.802,
+            "after_us": 34.167,
+            "device_wall_us": 306.59,
+            "host_call_us": 1398.04,
+            "host_bind_us": 647.34,
+            "host_publish_image_us": 36.52,
+            "host_prepare_us": 17.89
+          },
+          {
+            "round": 4,
+            "before_us": 54.032,
+            "aicore_window_us": 220.593,
+            "after_us": 33.033,
+            "device_wall_us": 307.658,
+            "host_call_us": 1137.13,
+            "host_bind_us": 316.86,
+            "host_publish_image_us": 28.13,
+            "host_prepare_us": 17.07
+          },
+          {
+            "round": 5,
+            "before_us": 57.456,
+            "aicore_window_us": 212.162,
+            "after_us": 33.457,
+            "device_wall_us": 303.075,
+            "host_call_us": 1011.58,
+            "host_bind_us": 305.84,
+            "host_publish_image_us": 33.29,
+            "host_prepare_us": 15.88
+          },
+          {
+            "round": 6,
+            "before_us": 54.628,
+            "aicore_window_us": 214.27,
+            "after_us": 33.822,
+            "device_wall_us": 302.719,
+            "host_call_us": 1077.92,
+            "host_bind_us": 344.24,
+            "host_publish_image_us": 37.84,
+            "host_prepare_us": 18.12
+          },
+          {
+            "round": 7,
+            "before_us": 55.617,
+            "aicore_window_us": 219.475,
+            "after_us": 33.205,
+            "device_wall_us": 308.297,
+            "host_call_us": 1402.29,
+            "host_bind_us": 315.7,
+            "host_publish_image_us": 32.8,
+            "host_prepare_us": 16.74
+          },
+          {
+            "round": 8,
+            "before_us": 58.896,
+            "aicore_window_us": 218.392,
+            "after_us": 34.718,
+            "device_wall_us": 312.006,
+            "host_call_us": 1024.57,
+            "host_bind_us": 318.9,
+            "host_publish_image_us": 33.11,
+            "host_prepare_us": 15.86
+          },
+          {
+            "round": 9,
+            "before_us": 57.69,
+            "aicore_window_us": 213.891,
+            "after_us": 32.332,
+            "device_wall_us": 303.913,
+            "host_call_us": 1064.86,
+            "host_bind_us": 324.16,
+            "host_publish_image_us": 36.31,
+            "host_prepare_us": 18.25
+          },
+          {
+            "round": 10,
+            "before_us": 56.701,
+            "aicore_window_us": 218.477,
+            "after_us": 34.085,
+            "device_wall_us": 309.263,
+            "host_call_us": 5890.35,
+            "host_bind_us": 4103.47,
+            "host_publish_image_us": 181.27,
+            "host_prepare_us": 37.06
+          }
+        ]
+      },
+      "l1": {
+        "sync_bound_us": 126.12,
+        "round_bounds_us": [
+          137.2,
+          132.6,
+          124.4,
+          126.8,
+          125.8,
+          125.4,
+          120.6,
+          122.7,
+          124.4,
+          121.3
+        ],
+        "all_optimal": true,
+        "model": "typed-capacity, non-preemptive block intervals; MIX per-block common start; sync_start all-block common start; task-completion DAG; zero scheduler cost; cluster placement relaxed; measured per-variant L1 durations floored to 100ns"
+      },
+      "l0_above_l1_bound_percent": 73.87
+    },
+    "merged": {
+      "runtime_commit": "120e15b9e938f5d7bde7a28f1d6c13664f725929",
+      "device": 3,
+      "runtime_sha256": {
+        "libsimpler_aicpu_dispatcher.so": "11c0a87a44a317d235a9b4bb5859d5cd10e4a3521e1d0af1bad93c219cdc72fa",
+        "libhost_runtime.so": "1921eaf4d4d30c3b8c33275e73e1eb388aa17894778a1b6c6c4073df17b5ebbe",
+        "libaicpu_kernel.so": "2a913dde3133646cf7db0d4bf39defe8cf305d9001a6a6c0355d0713c3b0d5d1",
+        "aicore_kernel.o": "3beab1c8b6680173b1e2e10087d75bf12949d05680118a982a2dd95d93edaba5"
+      },
+      "l0": {
+        "mean": {
+          "before_us": 58.0,
+          "aicore_window_us": 218.05,
+          "after_us": 34.025,
+          "device_wall_us": 310.075,
+          "host_call_us": 1116.086,
+          "host_bind_us": 340.72,
+          "host_publish_image_us": 33.157,
+          "host_prepare_us": 12.664
+        },
+        "samples": [
+          {
+            "round": 1,
+            "before_us": 51.304,
+            "aicore_window_us": 230.976,
+            "after_us": 32.506,
+            "device_wall_us": 314.786,
+            "host_call_us": 1358.56,
+            "host_bind_us": 415.99,
+            "host_publish_image_us": 33.77,
+            "host_prepare_us": 19.25
+          },
+          {
+            "round": 2,
+            "before_us": 53.442,
+            "aicore_window_us": 230.639,
+            "after_us": 33.755,
+            "device_wall_us": 317.836,
+            "host_call_us": 1102.55,
+            "host_bind_us": 308.99,
+            "host_publish_image_us": 33.87,
+            "host_prepare_us": 14.52
+          },
+          {
+            "round": 3,
+            "before_us": 55.136,
+            "aicore_window_us": 211.162,
+            "after_us": 33.34,
+            "device_wall_us": 299.638,
+            "host_call_us": 1054.48,
+            "host_bind_us": 347.48,
+            "host_publish_image_us": 34.52,
+            "host_prepare_us": 15.21
+          },
+          {
+            "round": 4,
+            "before_us": 51.811,
+            "aicore_window_us": 217.882,
+            "after_us": 34.054,
+            "device_wall_us": 303.747,
+            "host_call_us": 937.54,
+            "host_bind_us": 280.4,
+            "host_publish_image_us": 33.76,
+            "host_prepare_us": 12.81
+          },
+          {
+            "round": 5,
+            "before_us": 60.496,
+            "aicore_window_us": 213.278,
+            "after_us": 34.285,
+            "device_wall_us": 308.059,
+            "host_call_us": 1204.36,
+            "host_bind_us": 404.92,
+            "host_publish_image_us": 33.51,
+            "host_prepare_us": 12.11
+          },
+          {
+            "round": 6,
+            "before_us": 60.738,
+            "aicore_window_us": 221.495,
+            "after_us": 36.036,
+            "device_wall_us": 318.269,
+            "host_call_us": 1020.75,
+            "host_bind_us": 294.56,
+            "host_publish_image_us": 31.2,
+            "host_prepare_us": 10.79
+          },
+          {
+            "round": 7,
+            "before_us": 62.427,
+            "aicore_window_us": 205.532,
+            "after_us": 33.697,
+            "device_wall_us": 301.656,
+            "host_call_us": 1182.93,
+            "host_bind_us": 537.96,
+            "host_publish_image_us": 32.36,
+            "host_prepare_us": 10.17
+          },
+          {
+            "round": 8,
+            "before_us": 64.659,
+            "aicore_window_us": 203.115,
+            "after_us": 33.34,
+            "device_wall_us": 301.114,
+            "host_call_us": 1325.48,
+            "host_bind_us": 264.42,
+            "host_publish_image_us": 33.87,
+            "host_prepare_us": 11.33
+          },
+          {
+            "round": 9,
+            "before_us": 60.802,
+            "aicore_window_us": 223.248,
+            "after_us": 34.265,
+            "device_wall_us": 318.315,
+            "host_call_us": 963.07,
+            "host_bind_us": 283.37,
+            "host_publish_image_us": 34.22,
+            "host_prepare_us": 11.4
+          },
+          {
+            "round": 10,
+            "before_us": 59.185,
+            "aicore_window_us": 223.17,
+            "after_us": 34.976,
+            "device_wall_us": 317.331,
+            "host_call_us": 1011.14,
+            "host_bind_us": 269.11,
+            "host_publish_image_us": 30.49,
+            "host_prepare_us": 9.05
+          }
+        ]
+      },
+      "l1": {
+        "sync_bound_us": 125.41,
+        "round_bounds_us": [
+          138.8,
+          129.1,
+          125.9,
+          126.9,
+          125.4,
+          122.7,
+          123.2,
+          122.0,
+          121.4,
+          118.7
+        ],
+        "all_optimal": true,
+        "model": "typed-capacity, non-preemptive block intervals; MIX per-block common start; sync_start all-block common start; task-completion DAG; zero scheduler cost; cluster placement relaxed; measured per-variant L1 durations floored to 100ns"
+      },
+      "l0_above_l1_bound_percent": 73.87,
+      "l3_aicpu_detail": {
+        "mean": {
+          "before_us": 211.321,
+          "aicore_window_us": 394.195,
+          "after_us": 528.529,
+          "device_wall_us": 1134.044,
+          "host_call_us": 579494.604,
+          "host_bind_us": 699.228,
+          "host_publish_image_us": 190.041,
+          "host_prepare_us": 21.328,
+          "swimlane_init_us": 140.261,
+          "bootstrap_wait_us": 30.286,
+          "swimlane_collect_us": 447.978,
+          "exit_wait_us": 42.071,
+          "handshake_us": 9.449,
+          "representative_round": 8,
+          "representative_device_wall_us": 1145.153
+        },
+        "samples": [
+          {
+            "round": 1,
+            "before_us": 217.554,
+            "aicore_window_us": 409.983,
+            "after_us": 564.844,
+            "device_wall_us": 1192.38,
+            "host_call_us": 596930.95,
+            "host_bind_us": 1492.63,
+            "host_publish_image_us": 174.02,
+            "host_prepare_us": 21.52
+          },
+          {
+            "round": 2,
+            "before_us": 215.283,
+            "aicore_window_us": 395.946,
+            "after_us": 546.477,
+            "device_wall_us": 1157.706,
+            "host_call_us": 582239.76,
+            "host_bind_us": 869.69,
+            "host_publish_image_us": 220.72,
+            "host_prepare_us": 21.35
+          },
+          {
+            "round": 3,
+            "before_us": 203.431,
+            "aicore_window_us": 391.716,
+            "after_us": 565.213,
+            "device_wall_us": 1160.36,
+            "host_call_us": 633125.03,
+            "host_bind_us": 570.39,
+            "host_publish_image_us": 178.48,
+            "host_prepare_us": 19.94
+          },
+          {
+            "round": 4,
+            "before_us": 209.603,
+            "aicore_window_us": 394.937,
+            "after_us": 479.168,
+            "device_wall_us": 1083.708,
+            "host_call_us": 551183.17,
+            "host_bind_us": 604.56,
+            "host_publish_image_us": 209.47,
+            "host_prepare_us": 21.59
+          },
+          {
+            "round": 5,
+            "before_us": 208.465,
+            "aicore_window_us": 399.843,
+            "after_us": 529.701,
+            "device_wall_us": 1138.009,
+            "host_call_us": 566611.5,
+            "host_bind_us": 535.31,
+            "host_publish_image_us": 198.68,
+            "host_prepare_us": 27.18
+          },
+          {
+            "round": 6,
+            "before_us": 212.795,
+            "aicore_window_us": 385.21,
+            "after_us": 536.564,
+            "device_wall_us": 1134.569,
+            "host_call_us": 597575.23,
+            "host_bind_us": 656.24,
+            "host_publish_image_us": 192.89,
+            "host_prepare_us": 20.73
+          },
+          {
+            "round": 7,
+            "before_us": 210.98,
+            "aicore_window_us": 392.55,
+            "after_us": 545.863,
+            "device_wall_us": 1149.393,
+            "host_call_us": 588294.9,
+            "host_bind_us": 462.34,
+            "host_publish_image_us": 225.13,
+            "host_prepare_us": 20.74
+          },
+          {
+            "round": 8,
+            "before_us": 209.279,
+            "aicore_window_us": 391.36,
+            "after_us": 544.514,
+            "device_wall_us": 1145.153,
+            "host_call_us": 568084.91,
+            "host_bind_us": 429.21,
+            "host_publish_image_us": 176.85,
+            "host_prepare_us": 20.08
+          },
+          {
+            "round": 9,
+            "before_us": 215.558,
+            "aicore_window_us": 393.07,
+            "after_us": 451.179,
+            "device_wall_us": 1059.807,
+            "host_call_us": 562023.87,
+            "host_bind_us": 450.59,
+            "host_publish_image_us": 158.03,
+            "host_prepare_us": 20.25
+          },
+          {
+            "round": 10,
+            "before_us": 210.262,
+            "aicore_window_us": 387.332,
+            "after_us": 521.765,
+            "device_wall_us": 1119.359,
+            "host_call_us": 548876.72,
+            "host_bind_us": 921.32,
+            "host_publish_image_us": 166.14,
+            "host_prepare_us": 19.9
+          }
+        ]
+      }
+    }
+  },
+  "a6": {
+    "status": "pending_device_run",
+    "runtime_commit": "120e15b9e938f5d7bde7a28f1d6c13664f725929",
+    "l0": null,
+    "l1": null,
+    "l3": null
+  }
+}

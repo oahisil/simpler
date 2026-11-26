@@ -1,0 +1,1852 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>HBG 调度全流程 · 单卡 SWA 实现与性能</title>
+    <style>
+      :root {
+        --ink: #132e33;
+        --sub: #496165;
+        --line: #c7d1cb;
+        --paper: #f8f8f2;
+        --teal: #08685b;
+        --lt: #d8eae0;
+        --lb: #deeaef;
+        --lo: #f7e2bc;
+        --yellow: #efc865;
+        --dark: #143537;
+        --sans: "Instrument Sans", "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+        --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 78px;
+      }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--paper);
+        font-family: var(--sans);
+        line-height: 1.7;
+        font-size: 16px;
+      }
+      a {
+        color: var(--teal);
+        text-underline-offset: 4px;
+      }
+      button,
+      select {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:focus-visible,
+      a:focus-visible,
+      summary:focus-visible,
+      select:focus-visible {
+        outline: 3px solid #ba5c16;
+        outline-offset: 3px;
+      }
+      h1,
+      h2,
+      h3,
+      h4,
+      p,
+      figure,
+      ol,
+      ul,
+      dl,
+      dd {
+        margin: 0;
+      }
+      h1,
+      h2,
+      h3,
+      h4 {
+        line-height: 1.28;
+        text-wrap: balance;
+      }
+      code,
+      .mono,
+      .num,
+      td.num {
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+      }
+      code {
+        font-size: 0.87em;
+        overflow-wrap: anywhere;
+        background: #e7ece5;
+        border-radius: 3px;
+        padding: 0.07em 0.28em;
+      }
+      p + p {
+        margin-top: 0.65rem;
+      }
+      .wrap {
+        max-width: 1250px;
+        margin: auto;
+        padding-inline: clamp(18px, 4.5vw, 68px);
+      }
+      .top {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        background: #fafbf5f5;
+        border-bottom: 1px solid var(--line);
+      }
+      .top .wrap {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        min-height: 58px;
+      }
+      .brand {
+        font-weight: 800;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--ink);
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .mark {
+        display: grid;
+        grid-template-columns: repeat(2, 7px);
+        gap: 2px;
+        transform: rotate(-4deg);
+      }
+      .mark i {
+        height: 7px;
+        background: var(--teal);
+      }
+      .mark i:last-child {
+        background: #b77d1d;
+      }
+      .top nav {
+        display: flex;
+        gap: clamp(10px, 2.3vw, 32px);
+        font-size: 14px;
+      }
+      .top nav a {
+        color: var(--sub);
+        text-decoration: none;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+      .top nav a:hover {
+        color: var(--teal);
+        text-decoration: underline;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: 1.02fr 1fr;
+        gap: clamp(20px, 4vw, 64px);
+        align-items: center;
+        padding-block: clamp(32px, 4.4vw, 63px) 30px;
+      }
+      .eyebrow,
+      .kicker,
+      .pill,
+      .axis,
+      .minihead {
+        font: 650 12px/1.6 var(--mono);
+        letter-spacing: 0.07em;
+      }
+      .eyebrow {
+        color: var(--teal);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .eyebrow:before {
+        content: "";
+        width: 27px;
+        height: 3px;
+        background: var(--teal);
+      }
+      h1 {
+        font-size: clamp(40px, 4.6vw, 70px);
+        letter-spacing: -0.055em;
+        margin: 14px 0 16px;
+      }
+      h1 span {
+        color: var(--teal);
+      }
+      .hero p,
+      .lede {
+        color: var(--sub);
+        line-height: 1.85;
+      }
+      .hero p {
+        max-width: 34em;
+      }
+      .scope {
+        margin-top: 18px;
+        font-size: 12px;
+        color: var(--sub);
+      }
+      .board {
+        position: relative;
+        background-color: var(--dark);
+        background-image: radial-gradient(#52747480 0.8px, transparent 0.8px);
+        background-size: 15px 15px;
+        border: 1px solid #294847;
+        color: #eef8ec;
+        border-radius: 15px;
+        padding: clamp(15px, 2.2vw, 30px);
+      }
+      .board b {
+        font-weight: 650;
+      }
+      .board .title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #728d8366;
+        padding-bottom: 9px;
+        font-size: 14px;
+      }
+      .board .title span {
+        font: 12px var(--mono);
+        color: #c6dcd0;
+      }
+      .wire {
+        display: grid;
+        grid-template-columns: 1fr 40px 1fr;
+        align-items: stretch;
+        margin-top: 14px;
+      }
+      .chip {
+        border: 1px solid #89aaa0;
+        background: #204649;
+        border-radius: 6px;
+        text-align: center;
+        padding: 9px 4px;
+        display: grid;
+        align-content: center;
+      }
+      .chip small,
+      .board figcaption {
+        color: #cce1d8;
+        font-size: 12px;
+      }
+      .chip.hot {
+        border-color: #d5b55e;
+        color: #f8d888;
+      }
+      .linkline {
+        align-self: center;
+        text-align: center;
+        color: #efd075;
+      }
+      .gmline {
+        margin: 11px 0;
+        border-top: 1px dashed #a6c0ac80;
+        text-align: center;
+        padding-top: 6px;
+        color: #cee6d5;
+        font: 12px/1.6 var(--mono);
+      }
+      .cluster {
+        display: flex;
+        align-items: center;
+        justify-content: space-evenly;
+        gap: 5px;
+      }
+      .cluster b {
+        font: 700 14px/1 var(--mono);
+        border: 1px solid #8ab4a0;
+        border-radius: 4px;
+        background: #2d5b56;
+        padding: 9px 11px;
+      }
+      .cluster i {
+        color: #b6cdbd;
+        font-size: 12px;
+        font-style: normal;
+      }
+      .board figcaption {
+        margin-top: 11px;
+        text-align: center;
+      }
+      .keystrip {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-block: 1px solid var(--line);
+        padding: 15px 0;
+        gap: 16px;
+      }
+      .keystrip > div + div {
+        border-left: 1px solid var(--line);
+        padding-left: clamp(12px, 3vw, 48px);
+      }
+      .keystrip strong {
+        font: 700 clamp(21px, 2.7vw, 36px) / 1.3 var(--mono);
+        letter-spacing: -0.055em;
+      }
+      .keystrip span {
+        color: var(--sub);
+        font-size: 13px;
+        display: block;
+      }
+      .keystrip em {
+        font: normal 14px var(--mono);
+        color: var(--teal);
+      }
+      section.guide {
+        padding: clamp(38px, 5.1vw, 72px) 0;
+        border-bottom: 1px solid var(--line);
+        scroll-margin-top: 8px;
+      }
+      .sectionhead {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        align-items: end;
+        gap: 20px;
+        margin-bottom: 23px;
+      }
+      .sectionhead .lede {
+        font-size: 14px;
+      }
+      .kicker {
+        color: var(--teal);
+        margin-bottom: 7px;
+      }
+      h2 {
+        font-size: clamp(26px, 3vw, 40px);
+        letter-spacing: -0.04em;
+      }
+      h3 {
+        font-size: clamp(20px, 2vw, 28px);
+        letter-spacing: -0.03em;
+      }
+      h4 {
+        font-size: 16px;
+      }
+      .paper,
+      .panel {
+        background: #fffefa;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+      .panel {
+        padding: clamp(16px, 2.3vw, 32px);
+      }
+      .flow {
+        display: grid;
+        grid-template-columns: minmax(240px, 0.67fr) minmax(0, 1.45fr);
+        gap: 16px;
+      }
+      .stages {
+        display: grid;
+        align-content: start;
+        gap: 4px;
+      }
+      .stages button {
+        text-align: left;
+        display: grid;
+        grid-template-columns: 30px 1fr auto;
+        align-items: center;
+        gap: 7px;
+        background: transparent;
+        border: 1px solid transparent;
+        border-bottom: 1px solid var(--line);
+        border-radius: 3px;
+        padding: 7px 10px;
+      }
+      .stages button b {
+        font-size: 15px;
+      }
+      .stages button small {
+        font: 10px var(--mono);
+        color: var(--sub);
+      }
+      .stages button em {
+        font: 13px var(--mono);
+        color: var(--teal);
+      }
+      .stages button[aria-selected="true"] {
+        background: var(--dark);
+        color: white;
+        border-color: var(--dark);
+      }
+      .stages button[aria-selected="true"] em,
+      .stages button[aria-selected="true"] small {
+        color: #c6e9d8;
+      }
+      .stagecard {
+        border-top: 4px solid var(--teal);
+      }
+      .tagline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        color: var(--sub);
+        font-size: 12px;
+        margin-bottom: 11px;
+      }
+      .pill {
+        display: inline-block;
+        background: var(--lt);
+        color: #145b4d;
+        padding: 2px 8px;
+        border-radius: 3px;
+        letter-spacing: 0.015em;
+      }
+      .stagecard .summary {
+        font-size: 17px;
+        margin: 10px 0 16px;
+      }
+      .handoff {
+        display: grid;
+        grid-template-columns: 1fr 20px 1fr;
+        gap: 7px;
+        align-items: stretch;
+      }
+      .handoff div {
+        background: var(--lb);
+        border-radius: 5px;
+        padding: 9px 12px;
+        font-size: 14px;
+      }
+      .handoff div:last-child {
+        background: var(--lt);
+      }
+      .handoff b {
+        display: block;
+        font: 700 11px/1.6 var(--mono);
+        color: var(--sub);
+        margin-bottom: 2px;
+      }
+      .handoff i {
+        align-self: center;
+        text-align: center;
+        font-style: normal;
+        color: var(--teal);
+      }
+      .note {
+        color: var(--sub);
+        font-size: 14px;
+        margin-top: 14px;
+      }
+      .stagecard footer {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 14px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 13px;
+      }
+      .navstep {
+        display: flex;
+        gap: 6px;
+      }
+      .navstep button,
+      .controls button {
+        background: #fffefa;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 4px 10px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .navstep button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 18px;
+      }
+      .controls button {
+        padding: 7px 13px;
+      }
+      .controls button[aria-pressed="true"] {
+        color: white;
+        background: var(--dark);
+        border-color: var(--dark);
+      }
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .example .chain {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin: 17px 0;
+      }
+      .chain b {
+        background: var(--lt);
+        border: 1px solid #a6c8b5;
+        border-radius: 4px;
+        padding: 5px 8px;
+        font-size: 13px;
+      }
+      .chain span {
+        color: var(--sub);
+      }
+      .callout {
+        margin: 14px 0 0;
+        padding: 10px 14px;
+        background: #f4eddc;
+        border-left: 3px solid #bf8a2f;
+        font-size: 14px;
+      }
+      .panel p {
+        line-height: 1.75;
+      }
+      .panel h3 + p {
+        margin-top: 9px;
+      }
+      .stack {
+        display: grid;
+        gap: 13px;
+      }
+      .queue {
+        display: grid;
+        grid-template-columns: auto 1fr 1fr;
+        gap: 6px;
+        margin-top: 14px;
+        align-items: center;
+      }
+      .queue b,
+      .queue span {
+        font-size: 13px;
+      }
+      .queue span {
+        background: var(--lb);
+        border: 1px solid #b2cbd4;
+        text-align: center;
+        padding: 5px;
+        border-radius: 4px;
+      }
+      .queue .mix {
+        background: var(--lo);
+        border-color: #dcc39b;
+      }
+      .foot,
+      .source {
+        font-size: 13px;
+        color: var(--sub);
+        margin-top: 14px;
+      }
+      .source a + a {
+        margin-left: 9px;
+      }
+      .hw {
+        display: grid;
+        grid-template-columns: 1fr 1.22fr;
+        gap: 15px;
+      }
+      .hardware-card {
+        background: var(--dark);
+        color: #edf5ec;
+        border-color: var(--dark);
+      }
+      .hardware-card .eyebrow,
+      .hardware-card .note {
+        color: #d4e7d8;
+      }
+      .hardware-card .eyebrow:before {
+        background: var(--yellow);
+      }
+      .hardware-card h3 {
+        margin-top: 9px;
+      }
+      .lanebox {
+        margin: 18px 0;
+        border-radius: 6px;
+        border: 1px dashed #9eb6a4;
+        padding: 13px;
+      }
+      .lanebox strong {
+        font: 13px var(--mono);
+        color: #d4e7d8;
+      }
+      .lanes {
+        display: flex;
+        gap: 8px;
+        margin: 8px 0;
+      }
+      .lanes b {
+        border: 1px solid #a4c2b2;
+        color: #dff6e3;
+        background: #31584f;
+        border-radius: 6px;
+        padding: 9px 12px;
+      }
+      .lanes b:first-child {
+        border-color: #ebce86;
+        color: #fce4a1;
+        background: #554a32;
+      }
+      .hardware-card code {
+        background: #345651;
+        color: #eef5ce;
+      }
+      .spec {
+        list-style: none;
+        padding: 0;
+      }
+      .spec li + li {
+        border-top: 1px solid var(--line);
+        margin-top: 8px;
+        padding-top: 8px;
+      }
+      .spec li {
+        font-size: 14px;
+      }
+      .spec strong {
+        display: block;
+      }
+      .tablebox {
+        overflow-x: auto;
+        margin-top: 14px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 14px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      th {
+        font-size: 12px;
+        color: var(--sub);
+        background: #eef1e9;
+      }
+      td.num,
+      th.num {
+        text-align: right;
+        white-space: nowrap;
+      }
+      .plot {
+        display: grid;
+        gap: 9px;
+        margin: 18px 0 12px;
+      }
+      .barrow {
+        display: grid;
+        grid-template-columns: 98px 1fr 67px;
+        gap: 10px;
+        align-items: center;
+        font-size: 13px;
+      }
+      .track {
+        height: 20px;
+        border-radius: 3px;
+        background: #edf1ea;
+        overflow: hidden;
+      }
+      .bar {
+        height: 100%;
+        display: flex;
+      }
+      .bar i {
+        height: 100%;
+        display: block;
+      }
+      .cpre {
+        background: #99bdcb;
+      }
+      .ccore {
+        background: var(--teal);
+      }
+      .cpost {
+        background: #e3af54;
+      }
+      .legend {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        font-size: 12px;
+        color: var(--sub);
+      }
+      .legend i {
+        display: inline-block;
+        width: 11px;
+        height: 11px;
+        border-radius: 2px;
+        margin-right: 4px;
+        vertical-align: middle;
+      }
+      .perfhead {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .perfhead .controls {
+        margin: 0;
+      }
+      .insight {
+        border-top: 1px solid var(--line);
+        padding-top: 11px;
+        margin-top: 15px;
+        font-size: 14px;
+      }
+      .metricname {
+        font-weight: 700;
+      }
+      .datapair {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 9px;
+        margin-top: 12px;
+      }
+      .datapair > div {
+        padding: 12px;
+        border-radius: 6px;
+        background: var(--lt);
+      }
+      .datapair span {
+        font-size: 12px;
+        display: block;
+      }
+      .datapair b {
+        font: 700 23px/1.4 var(--mono);
+      }
+      details {
+        border-bottom: 1px solid var(--line);
+        padding: 10px 0;
+      }
+      summary {
+        font-weight: 680;
+        cursor: pointer;
+      }
+      details p {
+        font-size: 14px;
+        color: var(--sub);
+        margin: 7px 0;
+      }
+      .evidence {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-top: 16px;
+      }
+      .evidence article {
+        padding: 17px;
+      }
+      .evidence p {
+        font-size: 14px;
+        margin: 8px 0;
+      }
+      .evidence a {
+        font-size: 13px;
+      }
+      .end {
+        padding-block: 20px 40px;
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        color: var(--sub);
+        font-size: 13px;
+      }
+      .staticonly {
+        display: none;
+      }
+      .nojs {
+        padding: 12px;
+        color: #753c04;
+      }
+      .print-item {
+        break-inside: avoid;
+        margin: 12px 0;
+      }
+      @media (max-width: 850px) {
+        .hero {
+          grid-template-columns: 1fr 0.88fr;
+        }
+        .flow {
+          grid-template-columns: 215px 1fr;
+        }
+        .stages button {
+          padding: 8px 5px;
+        }
+        .hw {
+          grid-template-columns: 1fr 1.1fr;
+        }
+        .evidence {
+          grid-template-columns: 1fr;
+        }
+        .evidence article {
+          padding: 14px;
+        }
+      }
+      @media (max-width: 710px) {
+        html {
+          scroll-padding-top: 65px;
+        }
+        .top .wrap {
+          min-height: 48px;
+        }
+        .brand {
+          font-size: 13px;
+        }
+        .top nav {
+          font-size: 12px;
+          gap: 10px;
+        }
+        .hero,
+        .sectionhead,
+        .flow,
+        .split,
+        .hw {
+          grid-template-columns: 1fr;
+        }
+        .hero {
+          padding-block: 24px 18px;
+          gap: 16px;
+        }
+        .board {
+          padding: 15px;
+        }
+        .sectionhead {
+          gap: 8px;
+        }
+        .stages {
+          grid-template-columns: 1fr 1fr;
+          gap: 4px;
+        }
+        .stages button {
+          grid-template-columns: 22px 1fr;
+          gap: 3px;
+          padding: 6px;
+        }
+        .stages button b {
+          font-size: 13px;
+        }
+        .stages small {
+          display: none;
+        }
+        .flow {
+          gap: 10px;
+        }
+        .keystrip {
+          gap: 5px;
+        }
+        .keystrip span {
+          font-size: 11px;
+        }
+        .keystrip em {
+          font-size: 11px;
+        }
+        .keystrip > div + div {
+          padding-left: 8px;
+        }
+        .keystrip strong {
+          font-size: clamp(16px, 4.6vw, 23px);
+        }
+        .panel {
+          padding: 15px;
+        }
+        .barrow {
+          grid-template-columns: 80px 1fr 60px;
+          gap: 5px;
+          font-size: 12px;
+        }
+        .js-table th,
+        .js-table td {
+          padding: 6px;
+        }
+        .end {
+          flex-wrap: wrap;
+        }
+        .top nav a:last-child {
+          display: inline;
+        }
+      }
+      @media (max-width: 400px) {
+        .top nav {
+          gap: 7px;
+        }
+        .brand {
+          gap: 5px;
+        }
+        .top .wrap {
+          gap: 4px;
+        }
+        .wrap {
+          padding-inline: 14px;
+        }
+        .hero h1 {
+          font-size: 37px;
+        }
+        .handoff {
+          grid-template-columns: 1fr;
+        }
+        .handoff i {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+      @media print {
+        .top,
+        .navstep,
+        .controls,
+        .stages,
+        .dynamic,
+        .end a {
+          display: none !important;
+        }
+        .staticonly {
+          display: block;
+        }
+        .hero,
+        .hw,
+        .sectionhead,
+        .split,
+        .flow,
+        .evidence {
+          display: block;
+        }
+        .wrap {
+          padding: 0;
+        }
+        .guide,
+        section.guide {
+          padding: 14px 0;
+        }
+        .board,
+        .keystrip {
+          margin: 12px 0;
+        }
+        .panel,
+        .paper {
+          padding: 10px;
+          margin: 8px 0;
+          break-inside: avoid;
+        }
+        .print-item {
+          border-top: 1px solid #aaa;
+          padding-top: 5px;
+        }
+        .print-item p {
+          font-size: 12px;
+        }
+        .board,
+        .hardware-card {
+          background: #fff;
+          color: #222;
+        }
+        .board *,
+        .hardware-card * {
+          color: #222 !important;
+        }
+        .tablebox {
+          overflow: visible;
+        }
+        body {
+          font-size: 12px;
+        }
+        h1 {
+          font-size: 30px;
+        }
+        h2 {
+          font-size: 21px;
+        }
+        .source {
+          font-size: 11px;
+        }
+      }
+      .timing {
+        padding: clamp(16px, 2.3vw, 30px);
+        margin-top: 16px;
+      }
+      .timing h3 {
+        margin-bottom: 6px;
+      }
+      .timing .axis {
+        text-align: right;
+        color: var(--sub);
+        margin-bottom: 6px;
+      }
+      .trow {
+        display: grid;
+        grid-template-columns: minmax(82px, 17%) 1fr;
+        align-items: center;
+        gap: 8px;
+        margin: 6px 0;
+        font-size: 13px;
+      }
+      .trow > span {
+        font-weight: 650;
+      }
+      .tgrid {
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        background: repeating-linear-gradient(90deg, #e6eae4 0 1px, transparent 1px calc(100% / 12));
+        background-color: #f5f6f0;
+        min-height: 28px;
+      }
+      .tgrid b {
+        font-size: 12px;
+        border-radius: 3px;
+        padding: 3px 2px;
+        text-align: center;
+        align-content: center;
+        line-height: 1.35;
+        font-weight: 650;
+      }
+      .tgrid .wait {
+        background: var(--lo);
+        color: #694015;
+      }
+      .tgrid .work {
+        background: var(--teal);
+        color: white;
+      }
+      .tgrid .ready {
+        background: var(--lb);
+        color: #234b62;
+      }
+      .timing figcaption {
+        margin-top: 8px;
+        color: var(--sub);
+        font-size: 13px;
+      }
+      @media (max-width: 430px) {
+        .chip b {
+          font-size: 14px;
+        }
+        .trow {
+          grid-template-columns: 71px 1fr;
+          gap: 4px;
+          font-size: 12px;
+        }
+        .tgrid b {
+          font-size: 11px;
+        }
+        .datapair b {
+          font-size: 18px;
+        }
+      }
+    </style>
+  </head>
+  <body id="top">
+    <header class="top">
+      <div class="wrap">
+        <a class="brand" href="#top"
+          ><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>HBG 调度图解</a
+        >
+        <nav aria-label="页内导航">
+          <a href="#flow">全流程</a><a href="#scheduler">核内调度</a><a href="#hardware">硬件</a><a href="#perf">耗时</a
+          ><a href="#capture">泳道</a>
+        </nav>
+      </div>
+    </header>
+    <main class="wrap">
+      <div class="hero">
+        <div>
+          <div class="eyebrow">DSv4.1 / 单卡 SWA</div>
+          <h1>从任务图到<br /><span>最后一个核返回</span></h1>
+          <p>
+            Host 把依赖、分工和调用参数准备好。设备上，每个计算核的常驻调度器自己领工作、等前驱、调用计算函数。AICPU
+            负责把整组核启动起来，确认图完成，再逐核收回执行权。
+          </p>
+          <div class="scope">实现快照 · 2026-11-20　/　A5 主线与 A6 已测适配分支</div>
+        </div>
+        <figure class="board">
+          <div class="title"><b>一次设备运行中的分工</b><span>HBG / RESIDENT</span></div>
+          <div class="wire">
+            <div class="chip"><b>Host</b><small>编排、绑定、发布</small></div>
+            <div class="linkline">→</div>
+            <div class="chip"><b>设备 GM</b><small>任务图、调用参数、完成状态</small></div>
+          </div>
+          <div class="wire">
+            <div class="chip"><b>AICPU</b><small>启动、观察、退出</small></div>
+            <div class="linkline">⇄</div>
+            <div class="chip hot"><b>AICore 常驻调度器</b><small>读取图，决定本核何时执行</small></div>
+          </div>
+          <div class="gmline">MIX 工作在同一个物理核组内交接</div>
+          <div class="cluster"><b>AIC</b><i>⇄</i><b>SSBUF</b><i>⇄</i><b>AIV</b></div>
+          <figcaption>箭头表示控制或数据的交接。A5 的一个核组还可有第二个 AIV。</figcaption>
+        </figure>
+      </div>
+      <div class="keystrip">
+        <div>
+          <strong>16 <em>个任务</em></strong
+          ><span>SWA 图中的计算任务</span>
+        </div>
+        <div>
+          <strong>19 <em>个核函数</em></strong
+          ><span>MIX 的 C、V 有各自的入口</span>
+        </div>
+        <div>
+          <strong>616 <em>个实例</em></strong
+          ><span>A6 阶段 004 组合，每轮实际执行</span>
+        </div>
+      </div>
+      <section class="guide" id="flow">
+        <div class="sectionhead">
+          <div>
+            <div class="kicker">执行路径 / 01—08</div>
+            <h2>一轮 SWA 怎样交到设备上</h2>
+          </div>
+          <p class="lede">
+            按顺序选一个阶段，看输入、交付物，以及下一阶段什么时候才能开始。第一步是准备可复用的用例包，后续流程按每次运行展开。
+          </p>
+        </div>
+        <div class="flow">
+          <div class="stages" id="stage-tabs" role="tablist" aria-label="执行阶段"></div>
+          <article class="panel stagecard dynamic" id="stage-panel" role="tabpanel" tabindex="0"></article>
+        </div>
+        <div id="stage-print" class="staticonly"></div>
+        <noscript
+          ><p class="nojs">
+            交互图需要 JavaScript。执行顺序为生成运行包 → Host 编排 → 绑定并发布设备镜像 → 核发现与放行 → 领取与依赖检查
+            → 核执行 → 逻辑完成 → 逐核退出与输出校验。
+          </p></noscript
+        >
+      </section>
+      <section class="guide" id="scheduler">
+        <div class="sectionhead">
+          <div>
+            <div class="kicker">AICore / 常驻调度循环</div>
+            <h2>一个 block 拿到核以后</h2>
+          </div>
+          <p class="lede">
+            领取只确定“谁负责”。前驱已完成、参数已绑定、需要的协同条件已满足，才允许读取业务输入并进入核函数。
+          </p>
+        </div>
+        <div class="split">
+          <article class="panel example">
+            <div id="example-controls" class="controls" aria-label="任务类型"></div>
+            <div id="example-body"></div>
+          </article>
+          <article class="panel">
+            <h3>等待时还能看另一份工作</h3>
+            <div class="queue">
+              <b>普通任务</b><span>本核栈内槽位 0</span><span>本核栈内槽位 1</span><b>MIX 成员</b
+              ><span class="mix">对应 SSBUF 区 0</span><span class="mix">对应 SSBUF 区 1</span>
+            </div>
+            <p class="note">
+              每个 AIC 或 AIV worker 在常驻调度函数的私有栈帧中保留两个普通槽位。每个槽位记录任务号、block 编号、前驱检查进度和调用参数索引；
+              完整参数在设备 GM。MIX 成员也保留自己的本核状态，组内 C/V 通过 SSBUF 的两份共享描述符交接工作。
+              槽位 0 等前驱时，本核可以先执行槽位 1 已就绪的 block。
+            </p>
+            <div class="callout">
+              <b>什么开销被省掉了？</b> Host
+              预绑参数省去设备重复拼参；缓存已完成的前驱前缀省去重复查询；双槽让等待中的工作少挡住另一份可执行工作。它们分别作用于不同阶段。
+            </div>
+            <p class="source">
+              <a href="../../../../src/a5/runtime/host_build_graph/docs/RUNTIME_LOGIC.md">设备执行与双槽实现</a>
+              <a href="../../../../src/a5/runtime/host_build_graph/runtime/scheduler/scheduler_ready.h">槽位结构</a>
+            </p>
+          </article>
+        </div>
+        <figure class="timing paper" id="slot-sequence">
+          <h3>同一颗核，为什么两条调度泳道能重叠？</h3>
+          <p class="note">
+            假设 A 已领取、仍等前驱，B 依赖齐全且顺序允许先运行。调度槽可以同时保留 A 和 B；真正执行核体的轨道上，B 与 A
+            依次出现。
+          </p>
+          <div class="axis">事件先后 →</div>
+          <div class="trow">
+            <span>槽位 A</span>
+            <div class="tgrid">
+              <b class="wait" style="grid-column: 1/8">持有 A，等前驱</b
+              ><b class="ready" style="grid-column: 8/10">就绪</b><b class="work" style="grid-column: 10/13">执行 A</b>
+            </div>
+          </div>
+          <div class="trow">
+            <span>槽位 B</span>
+            <div class="tgrid">
+              <b class="ready" style="grid-column: 3/5">就绪</b><b class="work" style="grid-column: 5/8">执行 B</b>
+            </div>
+          </div>
+          <div class="trow">
+            <span>物理核体</span>
+            <div class="tgrid">
+              <b class="work" style="grid-column: 5/8">B</b><b class="work" style="grid-column: 10/13">A</b>
+            </div>
+          </div>
+          <figcaption>
+            机制示意，横向长度无时间刻度。在 #3189 的 L2 图中，前两行对应槽位驻留与调度端点，最后一行对应 Worker View 的
+            EXECUTE。
+          </figcaption>
+        </figure>
+      </section>
+      <section class="guide" id="hardware">
+        <div class="sectionhead">
+          <div>
+            <div class="kicker">硬件 / 控制与数据</div>
+            <h2>哪一份状态放在哪里</h2>
+          </div>
+          <p class="lede">
+            跨核共享图状态、同组 C/V 交接、AICPU 启停握手有各自的存储和读写方。切换芯片看实际使用的路径。
+          </p>
+        </div>
+        <div id="hw-controls" class="controls" aria-label="硬件平台"></div>
+        <div id="hw-body" class="hw"></div>
+        <details>
+          <summary>96 核同址访问，为什么 A6 实测分支保留 GM 计数？</summary>
+          <p>
+            002 使用的双槽 HBG 在启动前选好整轮完成数的读写位置。取得可用的 CntNotify ADD 映射时，每完成一个逻辑任务，
+            AICore 就给 STARS 通知 SRAM 中的计数器加一，AICPU 从同一计数器的 SET/read 地址读进度。
+            在 A6 的 GM 路径上，AICore 直接给 GM 中的 64 位变量加一，AICPU 直接读该变量，全程无需在两处之间拷贝。
+          </p>
+          <p>
+            96 核同时起跑，每核访问同一个 32 位地址一次。下表是每轮最后一核完成相对最早起跑的耗时，取 192 轮均值。A5 用
+            32C＋64V，A6 用 48C＋48V。读返回值已消费，写含 DSB_DDR。
+          </p>
+          <div class="tablebox">
+            <table>
+              <thead>
+                <tr>
+                  <th>操作</th>
+                  <th class="num">A5 µs</th>
+                  <th class="num">A6 µs</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>GM 普通读</td>
+                  <td class="num">1.660</td>
+                  <td class="num">0.503</td>
+                </tr>
+                <tr>
+                  <td>GM atomicAdd(0) 读</td>
+                  <td class="num">16.387</td>
+                  <td class="num">0.990</td>
+                </tr>
+                <tr>
+                  <td>CntNotify SET/read 地址读</td>
+                  <td class="num">1.199</td>
+                  <td class="num">1.225</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            A6 选择 GM 的直接原因是 ADD 直映射返回 507899；按 A5 别名 SET＋0x08 发出 96 次加一命令后，终值仍为 0。
+            上表中 A6 同址 GM 原子读的耗时约为 A5 的 1/16.6。A6 另测 96 次 64 位 GM atomicAdd(1)，最后一核平均
+            1.051 µs，193／193 轮由 AICore 读到 96。可见 A6 的同址原子竞争代价已小很多。A5 STARS ADD(1)
+            的同口径计时和 A6 同卡切换后端的 SWA 数据仍缺，因此不能量化两条加一路径的差距或切换后端的整层收益。
+          </p>
+          <a href="../results/002-hbg-same-address-access/README.zh-CN.md">六条访问路径与真实加一结果</a>
+        </details>
+        <details>
+          <summary>标量调度、缓存和屏障分别花在哪里？</summary>
+          <p>
+            AIC/AIV 上的标量单元执行目录游标、依赖检查和状态判断。频繁读共享元数据会增加标量访存及缓存工作量。DCCI
+            按适用模式维护缓存，DSB
+            按指定域保证访问顺序或完成；同组交接还需正确的发布与观察协议。缩小热数据、减少轮询、合并缓存维护是不同的优化。阶段
+            004 未单独测量标量指令速度或 TCM 预取收益。
+          </p>
+          <a href="../../../../src/a5/runtime/host_build_graph/docs/SCALAR_DATA_ACCESS.md">标量访存设计</a>
+        </details>
+      </section>
+
+      <section class="guide" id="perf">
+        <div class="sectionhead">
+          <div>
+            <div class="kicker">性能 / 从 Device wall 拆回执行阶段</div>
+            <h2>时间省在了哪里</h2>
+          </div>
+          <p class="lede">
+            只看首末核之间的跨度会漏掉设备启动和收尾。只看整段跨度，又分不清是核体缩短、等待缩短，还是采集本身变重。
+          </p>
+        </div>
+        <div class="panel">
+          <div class="perfhead">
+            <h3 id="chart-title">A6 单卡 SWA 同批对照</h3>
+            <div class="controls" id="perf-controls" aria-label="性能视图"></div>
+          </div>
+          <div id="perf-chart"></div>
+        </div>
+        <div class="split" style="margin-top: 16px">
+          <article class="panel">
+            <h3>两种尾部任务，两个原因</h3>
+            <div class="datapair">
+              <div>
+                <span>t27 · HC post · L3 单项跨度</span><b>56.147 → 18.052</b><span>µs，64 个 V block 改为 54 个</span>
+              </div>
+              <div>
+                <span>t21 · O-B · L3 单项跨度</span><b>37.289 → 30.226</b><span>µs，32 块输出列改为 54 块</span>
+              </div>
+            </div>
+            <p class="note">
+              HC post 把 160 个 chunk 分给 54 个 V，每个 chunk 一次处理四路输出，省去第二批下发并复用输入。O-B 将 5120
+              列从 32×160 改为 52×96＋2×64，让更多 C 核有独立输出。实测同时调整两项，L0 核窗口缩短 26.502 µs。单项 L3
+              跨度有并行重叠，不能直接加成整层收益。
+            </p>
+          </article>
+          <article class="panel">
+            <h3>下界怎样读</h3>
+            <p>
+              把另一组 L1 逐核时长按 100 ns 向下取整，保留任务依赖、核数、不可抢占 block、MIX
+              配对和同步启动要求，假定调度本身耗时为零。每个配置逐轮求解，然后取十轮均值。
+            </p>
+            <div class="callout">
+              <b>004 组合：</b>核窗口 290.068 µs，下界 192.760 µs，距下界 <b>50.48%</b>。差额 97.308 µs
+              是实测与模型的差距。核执行过程中暴露的空隙、资源分配、调度及两种采集口径都可能影响这一差额。
+            </div>
+            <p class="source"><a href="../../dsv41_scheduler/BOUND.md">下界约束与求解方法</a></p>
+          </article>
+        </div>
+        <details>
+          <summary>从 A6 迁移基线到 004，调度版本和算子分片分别在哪一步变了？</summary>
+          <div class="tablebox">
+            <table>
+              <thead>
+                <tr>
+                  <th>阶段</th>
+                  <th>实际执行的改动</th>
+                  <th class="num">L0 核窗口 µs</th>
+                  <th class="num">Device wall µs</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>00</td>
+                  <td>A6 首版 1C1V 计划，570 个执行实例</td>
+                  <td class="num">370.307</td>
+                  <td class="num">463.159</td>
+                </tr>
+                <tr>
+                  <td>002</td>
+                  <td>合入含双槽的主线调度，以 GM 累加整轮完成数；沿用 00 分片</td>
+                  <td class="num">328.139</td>
+                  <td class="num">414.771</td>
+                </tr>
+                <tr>
+                  <td>003</td>
+                  <td>t17 输出量化、t20 O-A 均改为 54 组，604 个实例</td>
+                  <td class="num">319.060</td>
+                  <td class="num">406.690</td>
+                </tr>
+                <tr>
+                  <td>004</td>
+                  <td>在 003 上调整 t21 O-B 和 t27 HC post，616 个实例</td>
+                  <td class="num">290.068</td>
+                  <td class="num">377.707</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            这些是各阶段的十轮均值，跨批次变化包含运行波动。判断 004 两个尾部任务的净收益，应取本页同批对照 316.570 →
+            290.068 µs。总实例数增加时，更多 C 核参与 O-B 与 HC post 末尾的第二批下发消失，两者仍可让关键路径缩短。
+          </p>
+          <p class="source">
+            <a href="../results/00-baseline/README.zh-CN.md">00 迁移基线</a> ·
+            <a href="../results/002-hbg-same-address-access/README.zh-CN.md">002 GM-FAA</a> ·
+            <a href="../results/003-a6-swa-blocks/README.zh-CN.md">003 分片</a>
+          </p>
+        </details>
+      </section>
+      <section class="guide" id="capture">
+        <div class="sectionhead">
+          <div>
+            <div class="kicker">观测 / L0—L4</div>
+            <h2>一段泳道，对应哪一步</h2>
+          </div>
+          <p class="lede">
+            L0 回答整层跑了多久，L1 给出每个核体的时长，L2 观察调度槽位，L3 拆具体调度阶段，L4 追更细的协议。
+          </p>
+        </div>
+        <div class="split">
+          <article class="panel">
+            <div class="controls" id="level-controls" aria-label="采集等级"></div>
+            <div id="level-body"></div>
+          </article>
+          <article class="panel">
+            <span class="pill">PR #3189 · 截至 2026-11-20 仍开放</span>
+            <h3 style="margin-top: 12px">L2 为什么能看见“等”</h3>
+            <p>
+              在关键状态变化处记时间，转换时用相邻端点画区间。例：第一次发现未完成前驱、后来确认全部满足，两点围出了本槽位的依赖等待。中间同一物理核可以推进别的槽位，所以一条长等待色块不等于标量一直忙，也不等于整核一直空闲。
+            </p>
+            <p class="note">
+              这份 PR 还调整了 A5 在窄任务与宽 SPMD 任务竞争时的目录顺序，并允许 AIV0 发布 MIX
+              后先处理已领取的较早普通工作。其 A5 SWA 配对 <b>L0</b> 均值为 187.990 → 175.583
+              µs（−6.60%），七用例均值之和下降 1.67%，其中三个用例略升。衡量 <b>L2 采集膨胀</b> 需同版本同用例比较
+              L2/L0，PR 中这组 L0 数字仅衡量执行策略变化。
+            </p>
+            <p class="source">
+              <a href="https://github.com/hw-native-sys/simpler/pull/3189">PR 说明、用例与配对数据</a>
+            </p>
+          </article>
+        </div>
+      </section>
+      <section class="guide" id="sources">
+        <div class="sectionhead">
+          <div>
+            <div class="kicker">源码 / 性能证据</div>
+            <h2>三个版本分别实现了什么</h2>
+          </div>
+          <p class="lede">A6 性能取用例归档。主线行为按指定提交阅读，开放 PR 的行为单独标记。</p>
+        </div>
+        <div class="evidence">
+          <article class="paper">
+            <span class="pill">A6 · 已测分支</span>
+            <h3 style="margin-top: 10px">双槽与 1C1V</h3>
+            <p>
+              合入 #3170 所在主线后，沿用双槽和 MIX 双区。A6 适配控制窗口、SSBUF 布局与 GM 记账，004 又按 54C／54V
+              调整业务分片。
+            </p>
+            <a href="a6-migration.zh-CN.md">平台适配与协议</a> ·
+            <a href="../results/004-a6-swa-output-tiles/README.zh-CN.md">004 同卡性能</a>
+          </article>
+          <article class="paper">
+            <span class="pill">A5 · 主线 ea5884265</span>
+            <h3 style="margin-top: 10px">固定归属与末端判定</h3>
+            <p>
+              #3184 为满足整波条件的任务固定 block 归属，省去动态领号；Host 列出所有活跃末端节点，AICPU
+              逐项确认完成。其他任务仍可动态分配。
+            </p>
+            <a href="https://github.com/hw-native-sys/simpler/pull/3184">#3184 改动</a> ·
+            <a
+              href="https://github.com/hw-native-sys/simpler/blob/ea5884265/src/a5/runtime/host_build_graph/docs/RUNTIME_LOGIC.md"
+              >对应主线设计</a
+            >
+          </article>
+          <article class="paper">
+            <span class="pill">A5 · #3189 提案</span>
+            <h3 style="margin-top: 10px">目录优先级与物理泳道</h3>
+            <p>
+              只在满足条件的同步图上调整顺序，并保留真实依赖。L2 的物理核轨道可看普通槽位、MIX 交接和核体边界。本页 A6
+              阶段 004 的性能采自在此之前的调度器。
+            </p>
+            <a href="https://github.com/hw-native-sys/simpler/pull/3189/files">#3189 实现差异</a> ·
+            <a href="../../../../src/a5/runtime/host_build_graph/docs/profiling_levels.md">分支采集等级</a>
+          </article>
+        </div>
+      </section>
+      <footer class="end">
+        <span>DSv4.1 · host_build_graph · 单卡 SWA</span><a href="../README.zh-CN.md">返回用例索引</a
+        ><a href="#top">回到开头 ↑</a>
+      </footer>
+    </main>
+    <script>
+      "use strict";
+      const root = "../../../../src/a5/runtime/host_build_graph/";
+      const stages = [
+        {
+          label: "构建独立运行包",
+          owner: "离线构建",
+          tag: "BUILD",
+          title: "把真实 SWA 子层变成可回放的包",
+          input: "已提取的图提交记录、C++ 核、固定输入与参考输出",
+          output: "本平台的 callable、任务计划、张量快照与 native runner",
+          text: "构建脚本用 CANN 工具链与 PTO-ISA 编译 C/V 核，提取机器码，组装用例。分片计划决定每个任务提交几个逻辑 block、各 block 需要哪些 C/V 入口。",
+          detail:
+            "新 PyPTO 算子需要先生成或提供核实现并取得编排。已有 SWA 包可直接复用这批材料，每轮只执行编排回放。A6 的 616 个实例是 004 的分片结果，图里的计算任务仍为 16 个。",
+          source: "../prepare.py",
+          link: "用例构建入口",
+        },
+        {
+          label: "注册并执行 Host 编排",
+          owner: "Host",
+          tag: "HOST",
+          title: "让编排函数生成这一轮的依赖图",
+          input: "运行包、输入张量与本轮参数",
+          output: "含任务编号、前驱、核编号、block 数的 Host 图",
+          text: "注册阶段加载编排共享库并解析入口，计算核获得设备函数地址。每次 run 在 Host 绑定张量，再由 run_host_orchestration 执行编排。回放的是提交操作，计算此时尚未开始。",
+          detail:
+            "图由任务的显式依赖和运行时按张量访问建立的依赖组成。编排函数返回时，Host 已看到整轮任务，可统一安排内存、依赖与核调用。注册好的 callable 可跨轮复用。",
+          source: root + "docs/RUNTIME_LOGIC.md",
+          link: "注册与 Host 编排",
+        },
+        {
+          label: "绑定、展开与发布",
+          owner: "Host → GM",
+          tag: "HOST",
+          title: "把图变成设备能直接执行的镜像",
+          input: "Host 图、核入口表、张量和标量参数",
+          output: "GM 中的任务图、引擎目录、逐实例调用参数和本轮状态",
+          text: "有原生 Graph 调用时，Host 绑定定义并给每次调用分配 ENTER、子节点和 EXIT。commit_host_plan 提交计划，create_scheduler_state 建目录和控制记录，prepare_scheduler_calls 给每个物理执行绑定函数地址与参数。随后发布镜像到设备 GM。",
+          detail:
+            "图外前驱完成后 ENTER 才放行；内部无依赖的分支可以并行。所有内部末端完成后 EXIT 才放行图外后继。控制节点不占计算槽。普通平铺任务直接走计划准备；固定 SWA 用例不依赖嵌套 Graph 才能运行。",
+          source: root + "host/runtime_maker.cpp",
+          link: "Host 计划与调用绑定",
+        },
+        {
+          label: "核发现与启跑",
+          owner: "AICPU ⇄ 核组",
+          tag: "DEVICE",
+          title: "先把核组配好，再开放执行门",
+          input: "设备镜像、启动纪元、worker 上下文和控制窗口表",
+          output: "已登记、完成 bootstrap、获准执行的常驻 worker",
+          text: "C/V 核在 GM 上报身份与本轮纪元。AICPU 按物理核号找到控制窗口，发布上下文 READY。核组核对目录、分工和 SSBUF 初始化；最后一组完成 bootstrap，AICPU 才向每个核写启动值。",
+          detail:
+            "A6 每组仅一个 V，启动完成掩码按两条参与 lane 计算。若仍等待 A5 的第二个 V，整张卡会停在 bootstrap，连第一条业务核都不会进入。",
+          source: root + "aicpu/aicore_lifecycle.cpp",
+          link: "发现、启动门与逐核放行",
+        },
+        {
+          label: "领 block、查前驱",
+          owner: "AICore 标量",
+          tag: "DEVICE",
+          title: "在本核找到工作，判断是否能读输入",
+          input: "按引擎排序的任务目录、可用槽位、前驱完成状态",
+          output: "有归属、有调用参数、满足依赖的执行槽位",
+          text: "常驻 worker 沿自己的目录游标找任务。目录依据拓扑代次、剩余依赖路径深度和稳定编号排序。可先领取 block 并绑定参数，再逐项查前驱；已经确认完成的前驱无需反复从头检查。",
+          detail:
+            "领完所有号表示该任务的工作已分配，其后继真正执行仍要看生产者 DONE。A5 主线 #3184 的整波任务可由核组与 lane 直接算出固定 block，省一次共享领号；A6 004 的测量使用较早的动态领取实现。",
+          source: root + "runtime/scheduler/scheduler_task_catalog.h",
+          link: "引擎目录与游标",
+        },
+        {
+          label: "普通或 MIX 核执行",
+          owner: "AIC / AIV",
+          tag: "DEVICE",
+          title: "用预绑参数调用核函数",
+          input: "就绪槽位、计算核设备地址、逐实例参数",
+          output: "各参与 lane 的执行结果、物理返回和可能登记的异步条件",
+          text: "普通 block 由本核执行。MIX block 由本组 AIV0 领取，在 SSBUF 发布代号、block 和参与掩码；C/V 成员各取自己的调用参数。满足依赖、顺序和适用的同步启动要求后，执行器按函数地址调用 kernel(args)。",
+          detail:
+            "AIC 执行矩阵计算，AIV 执行向量计算。MIX 成员可执行不同入口，总耗时受核内工作量、参与者到达时间与协作等待共同影响。计算结果写到任务指定的设备缓冲区。",
+          source: root + "aicore/resident_scheduler_impl.h",
+          link: "常驻执行器与函数调用",
+        },
+        {
+          label: "任务完成与后继放行",
+          owner: "核 → 核 / AICPU",
+          tag: "DEVICE",
+          title: "把物理返回收敛为逻辑 DONE",
+          input: "各实例的物理返回、协作成员 FIN、异步条件状态",
+          output: "后继可观察的完成状态，以及供 AICPU 判定整图结束的进度",
+          text: "同步任务等所有需要的执行贡献到齐；有延迟条件时还要等条件满足。GM 路径在最后一次结算后发布 DONE。后继核直接读取前驱的完成状态，继续自己的就绪检查。",
+          detail:
+            "A6 004 的唯一记账方在每个逻辑任务完成时对整轮 64 位 GM 计数加一，AICPU 据此监控。A5 最新主线由 Host 提前列出活跃末端，AICPU 等每个末端的 GM 状态或硬件通知成立后再退出。",
+          source: root + "runtime/scheduler/scheduler_ready.h",
+          link: "完成发布与后继检查",
+        },
+        {
+          label: "退出、回收与校验",
+          owner: "AICPU → Host",
+          tag: "RETURN",
+          title: "确认每个核真的退出，再交还结果",
+          input: "整图完成或运行错误、逐核确认值与控制窗口",
+          output: "可安全回收的本轮资源、终态、调用结果与输出张量",
+          text: "AICPU 分区发送 EXIT。核完成收尾后回写本轮确认值；AICPU 逐核核对、关窗并读回，再通过 GM 放行核返回。确认退休后汇总已开启的采集，Host 等设备执行结束并读取结果。",
+          detail:
+            "图已完成和所有核已停止访问运行内存是两个时刻。只有后者才能安全复用缓冲区。在这个用例里还要把 30 个可写缓冲区逐项与固定参考比对。",
+          source: root + "aicpu/aicpu_executor.cpp",
+          link: "设备执行、退休与收尾",
+        },
+      ];
+      const examples = [
+        {
+          name: "普通 SPMD",
+          title: "t21 O-B · 54 个独立 C block",
+          chain: ["目录领号", "检查前驱", "绑定槽位就绪", "AIC 执行", "贡献完成"],
+          body: "004 把 5120 个输出列分给 54 个 C block。一个 C 核只写自己负责的列。分工和入口在 Host 已经决定，设备根据可用槽位、依赖和顺序决定实际开始时间。",
+          end: "判断耗时：看单 block 核体，再看首块开始到末块结束的任务跨度。两者之差包含发起错位与尾部。",
+        },
+        {
+          name: "MIX 协作",
+          title: "t20 O-A · C/V 共同完成一个 block",
+          chain: ["AIV0 领取", "SSBUF 发布", "C/V 接收", "各执行入口", "汇齐 FIN"],
+          body: "A6 的 54 个 MIX 组各有 1C＋1V。代理把每组工作投递到一个 SSBUF 区，只有掩码指定的成员接收这一代描述符。每个成员保留自己的槽位，前驱和协同条件满足后执行，收齐这一代成员的 FIN 才可复用该区。",
+          end: "更多组未必更快：003 同时改动 t17 和 t20；其 t20 的 L3 十轮跨度比 00 更长。这两组还跨了调度版本，不能仅凭该差值给 t20 的分片单独定因。",
+        },
+        {
+          name: "延迟完成",
+          title: "defer_wait · 核已返回，后继何时能跑？",
+          chain: ["登记条件", "核返回", "CHECK 检查", "FINISH 结算", "后继见 DONE"],
+          body: "等待核把信号条件登记到运行时，然后释放执行资源。负责异步推进的 worker 发现待检查记录，读取信号；未满足的条件留待复查。核返回和条件结清共同决定逻辑完成时间。",
+          end: "在所有其他可运行任务都用尽时，条件被观察得晚，就会出现整卡没有核体执行的空白。这个固定 SWA 切片只覆盖同步计算与 MIX；跨卡 MoE 的等待需看对应图。",
+        },
+      ];
+      const chips = [
+        {
+          name: "A6 · 已测分支",
+          heading: "54 组 × 1C1V",
+          meta: "A6 · 004",
+          lanes: ["AIC", "AIV0"],
+          layout: "图示为 004 运行时使用的一组矩阵与向量执行单元。",
+          items: [
+            [
+              "设备 GM · 全卡共享",
+              "存设备镜像、张量、槽位控制和前驱 DONE。每个逻辑任务结清后，唯一记账方对整轮 GM 64 位计数加一，AICPU 观察总进度。其他核通过各自前驱的 DONE 判断输入就绪。",
+            ],
+            [
+              "SSBUF · 同组 C/V 共享",
+              "两个 MIX 区轮换保存任务、参与成员和代号，供同组成员交接工作。",
+            ],
+            [
+              "启停与退出回执",
+              "AICPU 通过平台接口放行计算并发出退出请求。各核在收尾后回送确认值。",
+            ],
+            [
+              "物理身份 · 只用于定位硬件",
+              "运行时依据设备上报的身份关联对应 worker。算子按逻辑 block 编号划分工作。",
+            ],
+          ],
+        },
+        {
+          name: "A5 · 主线",
+          heading: "32 组 × 1C2V",
+          meta: "Ascend950DT · SWA 测量设备",
+          lanes: ["AIC", "AIV0", "AIV1"],
+          layout: "该 SWA 设备实际使用 32C＋64V。运行时的寄存器表按硬件地址容量建表，测量时的活跃核数单独由设备上报。",
+          items: [
+            [
+              "设备 GM · 图、参数与后备完成状态",
+              "最新主线由 Host 标记活跃末端节点。AICPU 逐一检查其完成条件，所有末端都成立后才允许整图退出。",
+            ],
+            [
+              "CntNotify · 资源可用时",
+              "每个任务按映射使用硬件通知或 GM。计数通知可累加物理返回和异步条件的贡献，观察者读取阈值；SET 通知可表示已完成。AICPU 观察末端时使用相应的 ADD 阈值、SET 标志或 GM 状态。",
+            ],
+            [
+              "SSBUF · 同组 1C/2V 的任务交接",
+              "每组 3 KiB，调度区从偏移 2048 开始。AIV0 发布 MIX 描述符，掩码指定本次需要 C、V0、V1 中的哪些成员。",
+            ],
+            [
+              "SPR · 每核的放行与回执",
+              "CP1 写目标核窗口 +0xD0，AICore 读 DATA_MAIN_BASE。核通过 COND 回写本轮退出确认值，CP1 从 +0x5108 读取。生命周期握手还使用 GM。",
+            ],
+          ],
+        },
+      ];
+
+      const perfViews = [
+        {
+          name: "A6 · L0",
+          title: "A6 单卡 SWA · 同卡同批 L0",
+          scale: 425,
+          bound: true,
+          rows: [
+            ["同批对照", 51.539, 316.57, 35.893, 404.002, 209.01],
+            ["仅 HC post", 54.176, 299.023, 35.456, 388.655, 200.21],
+            ["仅 O-B", 50.951, 311.468, 34.574, 396.992, 199.77],
+            ["两项组合", 51.946, 290.068, 35.693, 377.707, 192.76],
+          ],
+          note: "四组使用同一运行时和固定输入，每组预热 1 轮、正式 10 轮，30／30 个可写缓冲区通过。组合相对同批对照，L0 窗口缩短 8.37%，Device wall 缩短 6.51%。这里测得的是分片与核实现的组合收益。",
+          src: "../results/004-a6-swa-output-tiles/README.zh-CN.md",
+        },
+        {
+          name: "A6 · L3",
+          title: "A6 单卡 SWA · AICPU 生命周期细分",
+          scale: 1250,
+          bound: false,
+          rows: [
+            ["003 归档", 176.81, 634.772, 370.105, 1181.688],
+            ["004 组合", 177.246, 582.659, 370.419, 1130.324],
+          ],
+          note: "004 的计算前含泳道初始化 98.602、握手 8.596、bootstrap 等待 47.309 µs；计算后含退出等待 51.237、泳道汇总 291.242 µs。它们已计在父区间内。004 L3 细分的 Device wall 是同配置 L0 的 2.99 倍，核窗口是 2.01 倍。这里包含 L3 与 AICPU 细分的共同开销。",
+          src: "../results/004-a6-swa-output-tiles/README.zh-CN.md",
+        },
+        {
+          name: "A5 · L0",
+          title: "A5 单卡 SWA · 阶段 001 的合并对照",
+          scale: 400,
+          bound: true,
+          rows: [
+            ["00 归档", 59.971, 269.286, 42.552, 371.809, 133.03],
+            ["001 纯主线", 55.833, 219.287, 33.595, 308.715, 126.12],
+            ["001 合并版", 58.0, 218.05, 34.025, 310.075, 125.41],
+          ],
+          note: "001 的纯主线 ea50c264e 与 A6 适配合并版共用一份 A5 回放包，同一卡上的核窗口均值相差 1.237 µs。00 为更早批次。001 合并版的 Host bind 为 340.720、发布镜像 33.157、准备执行 12.664、完整 chip.run 为 1116.086 µs。完整调用含设备执行与 Host 等待，三项 Host 准备只是其中的子区间。",
+          src: "../results/001-hbg-main-merge-swa/README.zh-CN.md",
+        },
+      ];
+      const levels = [
+        [
+          "L0",
+          "对比性能，用首末计算核定窗口",
+          "AICPU RunWall 开始 → 首核开始 → 末核结束 → AICPU RunWall 结束",
+          "关闭详细泳道；使用运行时性能端点，分别统计计算前、核窗口、计算后。Host 建图、落盘与参考输出比对在核窗口之外。同批同级比较才有可解释的差值。",
+        ],
+        [
+          "L1",
+          "每个核体执行了多久",
+          "kernel_start → kernel_end；按 task、block、C/V 归属",
+          "逐核体记录能区分单实例变慢与发起错位。它是同步下界的时长输入，还要结合 DAG、资源容量与同步约束。并行执行的各核体时长之和以核·µs 计，和墙钟跨度是两个量。",
+        ],
+        [
+          "L2",
+          "看物理核如何领取、等待和执行",
+          "#3189：领取／绑定 → 首次遇到未完成前驱 → READY → executor 接手 → 入核／返回 → 本地退休",
+          "分支原有 L2 提供调度时间戳和 AICPU 生命周期；#3189 细化普通槽位和 MIX 交接。打开 PR 版本的 Schedule 轨看等待端点，Worker View 的 EXECUTE 条只覆盖真正核体。",
+        ],
+        [
+          "L3",
+          "定位调度循环和 AICPU 前后段",
+          "Bootstrap → 探测／下发／完成／无进展轮询；AICPU 生命周期另列轨道",
+          "调度相位说明这一段循环做了什么。无推进的轮次可以仍在检查目录或退避。004 另启用 AICPU 生命周期细分，才能量化启动准备、退出等待、泳道汇总等成本。",
+        ],
+        [
+          "L4",
+          "诊断协议、身份与 Host 编排",
+          "run_epoch、worker、block、lane → 协议端点与更细的记录",
+          "用于解释异步或协作协议异常，需核对采集完整性和时钟。004 的主性能表使用 L0、下界使用 L1、阶段定位使用 L3。",
+        ],
+      ];
+      const get = (id) => document.getElementById(id);
+      const button = (s, fn) => {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.textContent = s;
+        el.addEventListener("click", fn);
+        return el;
+      };
+      function selectors(id, labels, show, initial = 0) {
+        const wrap = get(id);
+        const select = (i) => {
+          Array.from(wrap.children).forEach((item, j) => item.setAttribute("aria-pressed", String(i === j)));
+          show(i);
+        };
+        labels.forEach((label, i) => wrap.appendChild(button(label, () => select(i))));
+        select(initial);
+      }
+      function stageText(s) {
+        return `<div class="tagline"><span class="pill">${s.owner}</span><span>${s.tag}</span></div><h3>${s.title}</h3><p class="summary">${s.text}</p><div class="handoff"><div><b>收到</b>${s.input}</div><i aria-hidden="true">→</i><div><b>交付</b>${s.output}</div></div><p class="note">${s.detail}</p>`;
+      }
+      function selectStage(i, focus = false) {
+        const panel = get("stage-panel"),
+          tabs = Array.from(get("stage-tabs").children);
+        tabs.forEach((t, j) => {
+          t.setAttribute("aria-selected", String(i === j));
+          t.tabIndex = i === j ? 0 : -1;
+        });
+        panel.setAttribute("aria-labelledby", tabs[i].id);
+        const s = stages[i];
+        panel.innerHTML =
+          stageText(s) + `<footer><a href="${s.source}">${s.link} ↗</a><div class="navstep"></div></footer>`;
+        const nav = panel.querySelector(".navstep");
+        const prev = button("← 上一阶段", () => selectStage(i - 1, true)),
+          next = button("下一阶段 →", () => selectStage(i + 1, true));
+        prev.disabled = i === 0;
+        next.disabled = i === stages.length - 1;
+        nav.append(prev, next);
+        if (focus) tabs[i].focus({ preventScroll: true });
+      }
+      stages.forEach((s, i) => {
+        const index = String(i + 1).padStart(2, "0"),
+          tab = button("", () => selectStage(i));
+        tab.innerHTML = `<em>${index}</em><b>${s.label}</b><small>${s.tag}</small>`;
+        tab.id = "stage-" + index;
+        tab.setAttribute("role", "tab");
+        tab.setAttribute("aria-controls", "stage-panel");
+        get("stage-tabs").append(tab);
+        tab.addEventListener("keydown", (event) => {
+          const n = stages.length;
+          const target = {
+            ArrowRight: (i + 1) % n,
+            ArrowDown: (i + 1) % n,
+            ArrowLeft: (i + n - 1) % n,
+            ArrowUp: (i + n - 1) % n,
+            Home: 0,
+            End: n - 1,
+          }[event.key];
+          if (target !== undefined) {
+            event.preventDefault();
+            selectStage(target, true);
+          }
+        });
+      });
+      selectStage(0);
+      function exampleContent(i) {
+        const ex = examples[i];
+        return `<h3>${ex.title}</h3><div class="chain">${ex.chain.map((x) => `<b>${x}</b>`).join('<span aria-hidden="true">→</span>')}</div><p>${ex.body}</p><p class="note">${ex.end}</p>`;
+      }
+      selectors(
+        "example-controls",
+        examples.map((x) => x.name),
+        (i) => (get("example-body").innerHTML = exampleContent(i)),
+      );
+      function hardwareContent(i) {
+        const hw = chips[i];
+        return `<article class="panel hardware-card"><div class="eyebrow">${hw.meta}</div><h3>${hw.heading}</h3><div class="lanebox"><strong>单个计算核组</strong><div class="lanes">${hw.lanes.map((n) => `<b>${n}</b>`).join("")}</div><div>⇅　组内共享 SSBUF</div></div><p class="note">${hw.layout}</p></article><article class="panel"><ul class="spec">${hw.items.map(([k, v]) => `<li><strong>${k}</strong>${v}</li>`).join("")}</ul><p class="source"><a href="${i ? "https://github.com/hw-native-sys/simpler/blob/ea5884265/src/a5/runtime/host_build_graph/docs/RUNTIME_LOGIC.md" : "a6-migration.zh-CN.md"}">查看平台实现依据</a></p></article>`;
+      }
+      selectors(
+        "hw-controls",
+        chips.map((x) => x.name),
+        (i) => (get("hw-body").innerHTML = hardwareContent(i)),
+      );
+      function chartContent(i) {
+        const v = perfViews[i];
+        const fmt = (n) => n.toFixed(3);
+        const bars = v.rows
+          .map(
+            ([label, pre, core, post, total]) =>
+              `<div class="barrow"><b>${label}</b><div class="track" aria-hidden="true"><div class="bar">${[pre, core, post].map((n, j) => `<i class="${["cpre", "ccore", "cpost"][j]}" style="width:${(n / v.scale) * 100}%"></i>`).join("")}</div></div><span class="num">${fmt(total)}</span></div>`,
+          )
+          .join("");
+        const headers = ["计算前", "核窗口", "计算后", "Device wall", ...(v.bound ? ["L1 下界", "距下界"] : [])];
+        const rows = v.rows
+          .map(
+            ([label, pre, core, post, total, bound]) =>
+              `<tr><td>${label}</td>${[pre, core, post, total, ...(v.bound ? [bound] : [])].map((n) => `<td class="num">${fmt(n)}</td>`).join("")}${v.bound ? `<td class="num">${((core / bound - 1) * 100).toFixed(2)}%</td>` : ""}</tr>`,
+          )
+          .join("");
+        return `<figure aria-label="${v.title}，数值详见下表"><div class="plot">${bars}</div><figcaption class="legend"><span><i class="cpre"></i>计算前</span><span><i class="ccore"></i>首核开始 → 末核结束</span><span><i class="cpost"></i>计算后</span><span>同一面板共用 0–${v.scale} µs 刻度，右侧为 Device wall</span></figcaption></figure><div class="tablebox"><table class="js-table"><thead><tr><th scope="col">配置</th>${headers.map((h) => `<th scope="col" class="num">${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div><p class="insight">${v.note}</p><p class="source"><a href="${v.src}">实验条件与数据（时间单位 µs）</a></p>`;
+      }
+      selectors(
+        "perf-controls",
+        perfViews.map((x) => x.name),
+        (i) => {
+          get("chart-title").textContent = perfViews[i].title;
+          get("perf-chart").innerHTML = chartContent(i);
+        },
+      );
+      function levelContent(i) {
+        const [level, title, route, desc] = levels[i];
+        return `<h3>${level} · ${title}</h3><div class="callout">${route}</div><p class="note">${desc}</p>`;
+      }
+      selectors(
+        "level-controls",
+        levels.map((x) => x[0]),
+        (i) => (get("level-body").innerHTML = levelContent(i)),
+        2,
+      );
+      get("stage-print").innerHTML = stages
+        .map((s) => `<article class="print-item">${stageText(s)}</article>`)
+        .join("");
+      function addPrintVersion(id, html) {
+        const el = get(id);
+        el.classList.add("dynamic");
+        const copy = document.createElement("div");
+        copy.className = "staticonly";
+        copy.innerHTML = html;
+        el.after(copy);
+      }
+      addPrintVersion(
+        "example-body",
+        examples.map((_, i) => `<article class="print-item">${exampleContent(i)}</article>`).join(""),
+      );
+      addPrintVersion("hw-body", chips.map((_, i) => hardwareContent(i)).join(""));
+      addPrintVersion(
+        "perf-chart",
+        perfViews.map((v, i) => `<div class="print-item"><h3>${v.title}</h3>${chartContent(i)}</div>`).join(""),
+      );
+      addPrintVersion(
+        "level-body",
+        levels.map((_, i) => `<article class="print-item">${levelContent(i)}</article>`).join(""),
+      );
+    </script>
+  </body>
+</html>

@@ -126,9 +126,10 @@ void initialize(
 }
 
 int run(int argc, char **argv) {
-    if (argc == 3 && std::string(argv[1]) == "--describe-callable") {
+    const bool describe_layout = argc == 3 && std::string(argv[1]) == "--describe-layout";
+    if (describe_layout || (argc == 3 && std::string(argv[1]) == "--describe-callable")) {
         const auto binary = read_binary(argv[2]);
-        if (binary.size() < sizeof(ChipCallable)) throw std::runtime_error("Truncated callable");
+        validate_chip_callable_buffer(binary.data(), binary.size());
         const auto *source = reinterpret_cast<const ChipCallable *>(binary.data());
         std::cout << "{\"signature\":[";
         for (int i = 0; i < source->sig_count(); ++i) {
@@ -144,7 +145,13 @@ int run(int argc, char **argv) {
                 if (j) std::cout << ',';
                 std::cout << static_cast<int>(child.sig(j));
             }
-            std::cout << "]}";
+            std::cout << ']';
+            if (describe_layout) {
+                const auto offset =
+                    reinterpret_cast<const uint8_t *>(&child) - binary.data() + CoreCallable::binary_data_offset();
+                std::cout << ",\"binary_offset\":" << offset << ",\"binary_size\":" << child.binary_size();
+            }
+            std::cout << '}';
         }
         std::cout << "]}\n";
         return 0;
@@ -283,7 +290,10 @@ int run(int argc, char **argv) {
     if (rank < 0 || rank >= ranks) throw std::runtime_error("Rank outside original workload");
     ChipWorker worker;
     CallConfig config;
-    const uint64_t heaps[] = {2ULL << 30, 2ULL << 30, 1ULL << 30, 512ULL << 20};
+    // Capturing the EP2 forward and materializing its long prefixes can both exceed 2 GiB.
+    const bool ep2_forward =
+        runtime_name == "host_build_graph" && (!sliced || materialize) && !native_moe && ranks == 2;
+    const uint64_t heaps[] = {ep2_forward ? 4ULL << 30 : 2ULL << 30, 2ULL << 30, 1ULL << 30, 512ULL << 20};
     for (int i = 0; i < RUNTIME_ENV_RING_COUNT; ++i) {
         config.runtime_env.ring_task_window[i] = 262144;
         config.runtime_env.ring_heap[i] = heaps[i];

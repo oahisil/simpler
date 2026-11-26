@@ -32,7 +32,7 @@ struct alignas(64) SchedulerTaskCatalogHeader {
 struct SchedulerTaskCatalogOrder {
     uint32_t rank{0};
     uint32_t cooperative_index{UINT32_MAX};
-    uint32_t required_floor[PLATFORM_CORES_PER_BLOCKDIM]{};
+    uint32_t required_floor[SUBTASK_SLOT_COUNT]{};
     uint32_t next_mix_ref{UINT32_MAX};
     uint32_t requires_peer_order{0};
 };

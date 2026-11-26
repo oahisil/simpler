@@ -208,7 +208,7 @@ class KernelCompiler:
         # Map platform to architecture directory
         if platform in ("a2a3", "a2a3sim"):
             self.platform_dir = self.project_root / "src" / "a2a3" / "platform"
-        elif platform in ("a5", "a5sim"):
+        elif platform in ("a5", "a5sim", "a6"):
             self.platform_dir = self.project_root / "src" / "a5" / "platform"
         elif platform == "wsesim":
             self.platform_dir = self.project_root / "src" / "wse" / "platform"
@@ -216,7 +216,7 @@ class KernelCompiler:
             raise ValueError(f"Unknown platform: {platform}")
 
         # Create toolchain objects based on platform
-        if platform in ("a2a3", "a5"):
+        if platform in ("a2a3", "a5", "a6"):
             env_manager.ensure("ASCEND_HOME_PATH")
             self.ccec = CCECToolchain(platform)
             self.aarch64 = Aarch64GxxToolchain()
@@ -291,7 +291,7 @@ class KernelCompiler:
         # Map platform to runtime architecture
         if self.platform in ("a2a3", "a2a3sim"):
             arch = "a2a3"
-        elif self.platform in ("a5", "a5sim"):
+        elif self.platform in ("a5", "a5sim", "a6"):
             arch = "a5"  # Phase 2: A5 uses A5 runtime
         elif self.platform == "wsesim":
             arch = "wse"
@@ -327,7 +327,7 @@ class KernelCompiler:
             str(Path(__file__).resolve().parent / "incore"),
             str(self.project_root / "src" / "common" / "platform" / "include"),
         ]
-        if self.platform in ("a5", "a5sim"):
+        if self.platform in ("a5", "a5sim", "a6"):
             include_dirs.append(str(self.project_root / "src" / "a5" / "runtime"))
         return include_dirs
 
@@ -371,7 +371,7 @@ class KernelCompiler:
         # Map platform to runtime architecture
         if self.platform in ("a2a3", "a2a3sim"):
             arch = "a2a3"
-        elif self.platform in ("a5", "a5sim"):
+        elif self.platform in ("a5", "a5sim", "a6"):
             arch = "a5"  # Phase 2: A5 uses A5 runtime
         elif self.platform == "wsesim":
             arch = "wse"
@@ -453,7 +453,10 @@ class KernelCompiler:
         raise ValueError(f"Unknown runtime_name: {runtime_name!r}")
 
     def _orchestration_compile_flags(self, toolchain: Union[GxxToolchain, Aarch64GxxToolchain]) -> list[str]:
-        return [*toolchain.get_compile_flags(), *self._sanitizer_flags(toolchain)]
+        flags = [*toolchain.get_compile_flags(), *self._sanitizer_flags(toolchain)]
+        if self.platform == "a6":
+            flags.append("-DSIMPLER_PLATFORM_A6=1")
+        return flags
 
     @staticmethod
     def _orchestration_link_flags(toolchain: Union[GxxToolchain, Aarch64GxxToolchain]) -> list[str]:
@@ -754,6 +757,7 @@ class KernelCompiler:
                 "a2a3": ToolchainType.CCEC,
                 "a2a3sim": ToolchainType.HOST_GXX_15,
                 "a5": ToolchainType.CCEC,  # Phase 1: A5 uses same as A2A3
+                "a6": ToolchainType.CCEC,
                 "a5sim": ToolchainType.HOST_GXX_15,  # Phase 1: A5sim uses same as A2A3sim
                 "wsesim": ToolchainType.HOST_GXX_15,
             },

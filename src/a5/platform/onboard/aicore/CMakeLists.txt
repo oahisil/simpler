@@ -58,6 +58,12 @@ foreach(INC_DIR ${CMAKE_CUSTOM_INCLUDE_DIRS})
     list(APPEND CMAKE_CUSTOM_INCLUDE_DIR_FLAGS "-I${INC_DIR}")
 endforeach()
 
+if(SIMPLER_PLATFORM_A6)
+    set(AICORE_ARCH dav-920r1)
+else()
+    set(AICORE_ARCH dav-c310)
+endif()
+
 # Compiler flags
 set(AICORE_FLAGS
     "-c -O3 -g -x cce -Wall -std=c++17 \
@@ -70,6 +76,9 @@ set(AICORE_FLAGS
     ${CMAKE_CUSTOM_INCLUDE_DIR_FLAGS}"
 )
 separate_arguments(AICORE_FLAGS)
+if(SIMPLER_PLATFORM_A6)
+    list(APPEND AICORE_FLAGS -DSIMPLER_PLATFORM_A6=1)
+endif()
 
 # Step 1: Compile each source file to individual .o files for AIC and AIV
 set(ALL_AIC_OBJECTS "")
@@ -95,7 +104,8 @@ foreach(SRC_FILE ${ALL_SOURCES})
     # would run one binary in both arms.
     add_custom_command(
         OUTPUT ${OBJ_AIC}
-        COMMAND ${BISHENG_CC} ${AICORE_FLAGS} ${AIC_SOURCE_FLAGS} ${CMAKE_CUSTOM_INCLUDE_DIR_FLAGS} --cce-aicore-arch=dav-c310-cube
+        COMMAND ${BISHENG_CC} ${AICORE_FLAGS} ${AIC_SOURCE_FLAGS} ${CMAKE_CUSTOM_INCLUDE_DIR_FLAGS}
+                --cce-aicore-arch=${AICORE_ARCH}-cube
                 -MD -MF ${OBJ_AIC}.d -MT ${OBJ_AIC}
                 -o ${OBJ_AIC} ${SRC_FILE}
         DEPENDS ${SRC_FILE}
@@ -106,7 +116,7 @@ foreach(SRC_FILE ${ALL_SOURCES})
     # Compile for AIV architecture
     add_custom_command(
         OUTPUT ${OBJ_AIV}
-        COMMAND ${BISHENG_CC} ${AICORE_FLAGS} ${CMAKE_CUSTOM_INCLUDE_DIR_FLAGS} --cce-aicore-arch=dav-c310-vec
+        COMMAND ${BISHENG_CC} ${AICORE_FLAGS} ${CMAKE_CUSTOM_INCLUDE_DIR_FLAGS} --cce-aicore-arch=${AICORE_ARCH}-vec
                 -MD -MF ${OBJ_AIV}.d -MT ${OBJ_AIV}
                 -o ${OBJ_AIV} ${SRC_FILE}
         DEPENDS ${SRC_FILE}

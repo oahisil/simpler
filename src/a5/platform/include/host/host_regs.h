@@ -22,6 +22,7 @@
 #include "common/platform_config.h"
 #include <cstdint>
 #include <vector>
+#include "common/platform_config.h"
 
 // Forward declaration
 class MemoryAllocator;
@@ -36,17 +37,8 @@ class MemoryAllocator;
  */
 constexpr uint64_t REG_SUB_CORE_STRIDE = 0x100000ULL;
 
-/**
- * Mapping region size per AICore
- * Covers all 3 sub-cores (1 AIC + 2 AIV) = 3M total
- */
-constexpr uint32_t REG_AICORE_MAP_SIZE = 0x300000;
-
-/**
- * Register offsets for AIV sub-cores relative to AICore base
- */
-constexpr uint64_t REG_AIV_FIRST_OFFSET = REG_SUB_CORE_STRIDE;       // 1M
-constexpr uint64_t REG_AIV_SECOND_OFFSET = 2 * REG_SUB_CORE_STRIDE;  // 2M
+// HAL maps the C window followed by one window per vector lane.
+constexpr uint32_t REG_AICORE_MAP_SIZE = PLATFORM_CORES_PER_BLOCKDIM * REG_SUB_CORE_STRIDE;
 
 /**
  * Initialize AICore register addresses for runtime

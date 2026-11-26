@@ -1996,6 +1996,36 @@ def test_lifecycle_register_release_can_be_at_relative_time_origin(tmp_path):
     assert register_release["ts"] == 0.0
 
 
+def test_lifecycle_detail_keeps_outer_bounds_and_nested_intervals(tmp_path):
+    raw = tmp_path / "chip_swimlane_records.json"
+    document = (
+        Capture(runtime=TMR_RUNTIME, level=1, clock_freq_hz=1_000_000_000)
+        .aicore_task(task_id=7, reg_task_id=7, start=120, end=180)
+        .aicpu_lifecycle(thread_id=0, handshake_start_cycles=100, handshake_complete_cycles=110)
+        .build()
+    )
+    document["aicpu_lifecycle_records"][0]["detail_intervals"] = [
+        {"name": "executor", "start_cycles": 90, "end_cycles": 240},
+        {"name": "diagnostics", "start_cycles": 200, "end_cycles": 230},
+    ]
+    raw.write_text(json.dumps(document))
+    data = sc.read_perf_data(raw)
+    intervals = data["aicpu_lifecycle_records"][0]["detail_intervals"]
+    assert intervals[0]["start_time_us"] == 0
+    assert intervals[0]["end_time_us"] == pytest.approx(0.15)
+    output = tmp_path / "trace.json"
+    _trace(data["tasks"], str(output), aicpu_lifecycle_records=data["aicpu_lifecycle_records"])
+    events = {
+        event["name"]: event
+        for event in json.loads(output.read_text())["traceEvents"]
+        if event.get("cat") == "aicpu_lifecycle"
+    }
+    assert events["executor"]["ts"] == 0
+    assert events["diagnostics"]["ts"] == pytest.approx(0.11)
+    assert events["diagnostics"]["dur"] == pytest.approx(0.03)
+    assert events["handshake_partition"]["ts"] == pytest.approx(0.01)
+
+
 def test_lifecycle_omits_missing_register_release(tmp_path):
     trace_path = tmp_path / "merged_swimlane.json"
     _trace(
@@ -3726,3 +3756,9 @@ def test_percounter_l1_keeps_graph_task_identity_and_setup_interval(tmp_path):
     assert worker[0]["args"]["kernel-duration-us"] == pytest.approx(9.0)
     assert worker[0]["args"]["local_setup_us"] == pytest.approx(0.5)
     assert worker[0]["args"]["run_epoch"] == 4
+
+
+def test_dependency_kernel_lookup_uses_execution_slot_for_vector_lanes():
+    kernels = {7: [-1, 12, 15]}
+    assert sc.resolve_func_id_from_kernel_map(7, "aiv", kernels, 2) == 15
+    assert sc.resolve_func_id_from_kernel_map(7, "aiv", kernels) == 12
