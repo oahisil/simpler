@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -50,6 +51,16 @@ def selected_records(tools, plan):
     if len(tasks) != 16 or executions != 578:
         raise ValueError("Expected the original SWA: 16 tasks and 578 kernel instances")
     return sorted({k for r in tasks for k in r["kernels"] if k >= 0})
+
+
+def validate_callable(tools, path, metadata, kernels):
+    actual = json.loads(capture([tools / "native-runner", "--describe-callable", path]))
+    expected = {
+        "signature": metadata["signature"],
+        "kernels": [{"id": kernel["func_id"], "signature": kernel["signature"]} for kernel in kernels],
+    }
+    if actual != expected:
+        raise ValueError("Assembled callable differs from the SWA manifest")
 
 
 def export_fixture(args):
@@ -123,20 +134,7 @@ def unpack_fixture(directory):
     return metadata
 
 
-def build(args):
-    # Compiler helpers are imported only for building, never for fixture checks.
-    sys.path[:0] = [str(REPO), str(REPO / "python")]
-    from simpler_setup.compile_pool import compile_slot, compile_worker_budget  # noqa: PLC0415
-    from simpler_setup.elf_parser import extract_text_section  # noqa: PLC0415
-    from simpler_setup.kernel_compiler import KernelCompiler  # noqa: PLC0415
-
-    if args.jobs < 1 or not (args.pto_isa / "include/pto").is_dir():
-        raise ValueError("Need positive --jobs and --pto-isa containing include/pto")
-    build_dir = (args.build_dir or HERE / "build" / args.platform).resolve()
-    bundle, tools = build_dir / "bundle", build_dir / "host"
-    if bundle.exists():
-        raise ValueError("Bundle already exists; use a new --build-dir for another build")
-    build_dir.mkdir(parents=True, exist_ok=True)
+def build_host_tools(tools, platform, jobs):
     subprocess.run(
         [
             "cmake",
@@ -148,7 +146,7 @@ def build(args):
             "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
             f"-DSIMPLER_ROOT={REPO}",
-            f"-DDSV41_ARCH={args.platform}",
+            f"-DDSV41_ARCH={platform}",
         ],
         check=True,
     )
@@ -162,30 +160,47 @@ def build(args):
             "replay",
             "record-tool",
             "--parallel",
-            str(args.jobs),
+            str(jobs),
         ],
         check=True,
     )
+
+
+def prepare_bundle(bundle, tools, platform):
     metadata = unpack_fixture(bundle)
     if selected_records(tools, bundle / "plan-rank0.bin") != metadata["kernel_ids"]:
         raise ValueError("Captured plan does not match the selected SWA kernels")
-    executions = 578
-    if args.platform == "a6":
-        plan_dir = build_dir / "plan-conversion"
-        subprocess.run([sys.executable, str(HERE / "prepare_plan.py"), "--output", str(plan_dir)], check=True)
-        converted = plan_dir / "plan-a6-rank0.bin"
-        conversion = json.loads((plan_dir / "summary.json").read_text())
-        if digest(converted.read_bytes()) != conversion["a6_plan_sha256"]:
-            raise ValueError("Converted plan differs from its checked output")
-        shutil.copyfile(converted, bundle / "plan-rank0.bin")
-        executions = conversion["a6_executions"]
-    compiler = KernelCompiler(args.platform)
+    executions = metadata["executions"]
+    if platform == "a6":
+        with tempfile.TemporaryDirectory(prefix="swa-plan-", dir=bundle.parent) as temporary:
+            plan_dir = Path(temporary) / "conversion"
+            subprocess.run([sys.executable, str(HERE / "prepare_plan.py"), "--output", str(plan_dir)], check=True)
+            converted = plan_dir / "plan-a6-rank0.bin"
+            conversion = json.loads((plan_dir / "summary.json").read_text())
+            if digest(converted.read_bytes()) != conversion["a6_plan_sha256"]:
+                raise ValueError("Converted plan differs from its checked output")
+            shutil.copyfile(converted, bundle / "plan-rank0.bin")
+            executions = conversion["a6_executions"]
     sources = HERE / "kernels"
     manifest = json.loads((sources / "manifest.json").read_text())
     kernels = [k for k in manifest["kernels"] if k["func_id"] in metadata["kernel_ids"]]
     if sorted(k["func_id"] for k in kernels) != metadata["kernel_ids"]:
         raise ValueError("SWA kernel sources are incomplete")
-    binary_dir = build_dir / "kernels"
+    for kernel in kernels:
+        if not (sources / kernel["source"]).is_file():
+            raise ValueError(f"Missing SWA kernel source: {kernel['source']}")
+    return metadata, kernels, executions
+
+
+def compile_kernels(args, kernels, binary_dir):
+    # Compiler helpers are imported only for building, never for fixture checks.
+    sys.path[:0] = [str(REPO), str(REPO / "python")]
+    from simpler_setup.compile_pool import compile_slot, compile_worker_budget  # noqa: PLC0415
+    from simpler_setup.elf_parser import extract_text_section  # noqa: PLC0415
+    from simpler_setup.kernel_compiler import KernelCompiler  # noqa: PLC0415
+
+    compiler = KernelCompiler(args.platform)
+    sources = HERE / "kernels"
     binary_dir.mkdir(exist_ok=True)
 
     def compile_one(kernel):
@@ -214,49 +229,85 @@ def build(args):
         }
 
     with compile_worker_budget(args.jobs), ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        compiled = list(pool.map(compile_one, kernels))
+        return list(pool.map(compile_one, kernels))
 
-    def signature(values):
-        return f"{len(values)} " + " ".join(map(str, values))
 
-    rows = [signature(metadata["signature"]), str(len(kernels))]
-    for kernel, record in zip(kernels, compiled, strict=True):
-        rows.append(
-            f"{kernel['func_id']} {signature(kernel['signature'])} "
-            + json.dumps(str(binary_dir / record["file"]), ensure_ascii=False)
-        )
-    assembly = build_dir / "assembly.txt"
-    assembly.write_text("\n".join(rows) + "\n")
-    subprocess.run(
-        [
-            str(tools / "native-runner"),
-            "--assemble-orchestration",
-            str(assembly),
-            str(tools / "libreplay.so"),
-            str(bundle / "callable.bin"),
-        ],
-        check=True,
-    )
-    save(
-        build_dir / "build.json",
-        {
+def build(args):
+    if not (args.pto_isa / "include/pto").is_dir():
+        raise ValueError("--pto-isa must contain include/pto")
+    build_dir = (args.build_dir or HERE / "build" / args.platform).resolve()
+    bundle, tools = build_dir / "bundle", build_dir / "host"
+    if bundle.exists():
+        raise ValueError("Bundle already exists; use a new --build-dir for another build")
+    build_host_tools(tools, args.platform, args.jobs)
+    binary_dir = build_dir / "kernels"
+    with tempfile.TemporaryDirectory(prefix="swa-build-", dir=build_dir) as temporary:
+        staged = Path(temporary) / "bundle"
+        metadata, kernels, executions = prepare_bundle(staged, tools, args.platform)
+        compiled = compile_kernels(args, kernels, binary_dir)
+        callable_path = staged / "callable.bin"
+        assemble_replay(tools, callable_path, build_dir / "assembly.txt", metadata, kernels, binary_dir)
+        manifest = {
             "platform": args.platform,
             "kernel_runtime": "percounter",
             "source_commit": capture(["git", "-C", REPO, "rev-parse", "HEAD"]).strip(),
             "pto_isa_commit": capture(["git", "-C", args.pto_isa, "rev-parse", "HEAD"]).strip(),
             "fixture_sha256": digest((FIXTURE / "swa.tar.gz").read_bytes()),
-            "callable_sha256": digest((bundle / "callable.bin").read_bytes()),
+            "callable_sha256": digest(callable_path.read_bytes()),
             "kernels": compiled,
-            "tasks": 16,
+            "tasks": metadata["tasks"],
             "executions": executions,
-            "plan_sha256": digest((bundle / "plan-rank0.bin").read_bytes()),
+            "plan_sha256": digest((staged / "plan-rank0.bin").read_bytes()),
             "replay_sha256": digest((tools / "libreplay.so").read_bytes()),
             "runner_sha256": digest((tools / "native-runner").read_bytes()),
-        },
-    )
-    if any(name in {"torch", "pypto"} or name.startswith(("torch.", "pypto.")) for name in sys.modules):
-        raise RuntimeError("Unexpected model Python dependency during SWA build")
+        }
+        if any(name in {"torch", "pypto"} or name.startswith(("torch.", "pypto.")) for name in sys.modules):
+            raise RuntimeError("Unexpected model Python dependency during SWA build")
+        staged.rename(bundle)
+    save(build_dir / "build.json", manifest)
     print(f"Ready: {bundle}")
+
+
+def assemble_replay(tools, output, assembly, metadata, kernels, binary_dir):
+    def signature(values):
+        return f"{len(values)} " + " ".join(map(str, values))
+
+    rows = [signature(metadata["signature"]), str(len(kernels))]
+    for kernel in kernels:
+        func_id = kernel["func_id"]
+        path = binary_dir / f"kernel-{func_id}.bin"
+        rows.append(f"{func_id} {signature(kernel['signature'])} " + json.dumps(str(path), ensure_ascii=False))
+    assembly.write_text("\n".join(rows) + "\n")
+    subprocess.run(
+        [tools / "native-runner", "--assemble-orchestration", assembly, tools / "libreplay.so", output], check=True
+    )
+    validate_callable(tools, output, metadata, kernels)
+
+
+def check(args):
+    """Validate the frozen input and A6 plan without CANN, kernel compilation or a device."""
+    build_dir = (args.build_dir or HERE / "build" / f"{args.platform}-check").resolve()
+    output = (args.output or build_dir / "summary.json").resolve()
+    if output.exists():
+        raise ValueError(f"Output already exists: {output}")
+    tools = build_dir / "host"
+    build_host_tools(tools, args.platform, args.jobs)
+    with tempfile.TemporaryDirectory(prefix="swa-check-", dir=build_dir) as temporary:
+        bundle = Path(temporary) / "bundle"
+        metadata, kernels, executions = prepare_bundle(bundle, tools, args.platform)
+        result = {
+            "platform": args.platform,
+            "runtime": "percounter",
+            "runtime_executed": False,
+            "fixture_sha256": digest((FIXTURE / "swa.tar.gz").read_bytes()),
+            "plan_sha256": digest((bundle / "plan-rank0.bin").read_bytes()),
+            "kernel_ids": [kernel["func_id"] for kernel in kernels],
+            "tasks": metadata["tasks"],
+            "executions": executions,
+        }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    save(output, result)
+    print(f"Offline SWA check passed: {output}")
 
 
 def main():
@@ -271,9 +322,18 @@ def main():
     compile_case.add_argument("--pto-isa", type=Path, default=REPO / "build/pto-isa")
     compile_case.add_argument("--build-dir", type=Path)
     compile_case.add_argument("--jobs", type=int, default=4)
+    offline = commands.add_parser("check", help="Validate the frozen SWA inputs and A6 plan offline")
+    offline.add_argument("--platform", choices=["a5", "a6"], default="a6")
+    offline.add_argument("--build-dir", type=Path)
+    offline.add_argument("--output", type=Path)
+    offline.add_argument("--jobs", type=int, default=4)
     args = parser.parse_args()
+    if args.command != "export" and args.jobs < 1:
+        parser.error("--jobs must be positive")
     if args.command == "export":
         export_fixture(args)
+    elif args.command == "check":
+        check(args)
     else:
         build(args)
 

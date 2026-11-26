@@ -86,6 +86,20 @@ def allocated_device(parser, requested):
     return int(device)
 
 
+def validate_callable(parser, runner, bundle, build):
+    try:
+        description = subprocess.run(
+            [runner, "--describe-callable", bundle / "callable.bin"], check=True, capture_output=True, text=True
+        )
+        actual = json.loads(description.stdout)
+    except subprocess.CalledProcessError as error:
+        parser.error(f"Invalid callable wire: {error.stderr.strip()}")
+    except (OSError, json.JSONDecodeError) as error:
+        parser.error(f"Invalid callable wire: {error}")
+    if [kernel["id"] for kernel in actual["kernels"]] != [kernel["id"] for kernel in build["kernels"]]:
+        parser.error("Callable kernel table differs from build.json")
+
+
 def parse_options():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=["a5", "a6"], default="a5")
@@ -140,8 +154,11 @@ def main():
         parser.error("Build and requested platform differ")
     bundle, runner = build_dir / "bundle", build_dir / "host/native-runner"
     for path, expected in ((runner, build["runner_sha256"]), (bundle / "callable.bin", build["callable_sha256"])):
+        if not path.is_file():
+            parser.error(f"Missing build artifact: {path}; rebuild the SWA case with prepare.py build")
         if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             parser.error(f"Build artifact changed: {path.name}")
+    validate_callable(parser, runner, bundle, build)
     if (
         args.platform == "a6"
         and hashlib.sha256((bundle / "plan-rank0.bin").read_bytes()).hexdigest() != build["plan_sha256"]

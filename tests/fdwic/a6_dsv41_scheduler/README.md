@@ -12,6 +12,20 @@ This builds the Calendar runtime and frozen SWA case, then writes replay results
 The reports below describe the earlier dynamic scheduler. Its recorded timings and the offline
 `claim` and `entry_commit` analyses refer to captures from that scheduler.
 
+The offline check uses Linux or WSL, a host C++ compiler, CMake and Ninja to verify the frozen inputs,
+kernel manifest and A6 plan.
+
+```bash
+python tests/fdwic/a6_dsv41_scheduler/prepare.py check --platform a6 \
+    --build-dir build/swa-a6-offline-check \
+    --output build/swa-a6-offline-check/summary.json
+```
+
+The SWA snapshot contains 16 tasks. The original plan issues 578 kernel instances and the A6 plan issues 570.
+The full `build` command requires CANN and PTO-ISA to compile the 19 Percounter kernels. It assembles
+`callable.bin` with the current checkout and checks its signatures. Before device execution, `run.py`
+checks the artifact hashes, callable wire format and kernel IDs.
+
 ## Historical Measurements
 
 本目录提供 SWA 的生产 percounter 回放、冻结数据和 A6 构建入口。

@@ -128,7 +128,7 @@ void initialize(
 int run(int argc, char **argv) {
     if (argc == 3 && std::string(argv[1]) == "--describe-callable") {
         const auto binary = read_binary(argv[2]);
-        if (binary.size() < sizeof(ChipCallable)) throw std::runtime_error("Truncated callable");
+        validate_chip_callable_buffer(binary.data(), binary.size());
         const auto *source = reinterpret_cast<const ChipCallable *>(binary.data());
         std::cout << "{\"signature\":[";
         for (int i = 0; i < source->sig_count(); ++i) {

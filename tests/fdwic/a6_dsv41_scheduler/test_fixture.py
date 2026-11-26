@@ -11,6 +11,10 @@
 
 import importlib.util
 import json
+import os
+import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,6 +66,59 @@ class FixtureTest(unittest.TestCase):
             with patch.object(PREPARE, "FIXTURE", fixture):
                 with self.assertRaisesRegex(ValueError, "Fixture content changed: rank0.txt"):
                     PREPARE.unpack_fixture(Path(temporary) / "bundle")
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Native replay tools require Linux")
+    def test_a6_host_preflight_and_callable_wire(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            build = Path(temporary)
+            env = {key: value for key, value in os.environ.items() if key not in {"ASCEND_HOME_PATH", "TASK_DEVICE"}}
+            subprocess.run(
+                [sys.executable, "-I", HERE / "prepare.py", "check", "--platform", "a6", "--build-dir", build],
+                check=True,
+                env=env,
+            )
+            report = json.loads((build / "summary.json").read_text())
+            self.assertEqual((report["tasks"], report["executions"], len(report["kernel_ids"])), (16, 570, 19))
+            self.assertFalse(report["runtime_executed"])
+
+            bundle, tools, binaries = build / "bundle", build / "host", build / "kernels"
+            metadata = PREPARE.unpack_fixture(bundle)
+            sources = json.loads((HERE / "kernels/manifest.json").read_text())
+            kernels = [kernel for kernel in sources["kernels"] if kernel["func_id"] in report["kernel_ids"]]
+            binaries.mkdir()
+            for kernel in kernels:
+                (binaries / f"kernel-{kernel['func_id']}.bin").write_bytes(b"host-only packing test")
+            image, runner = bundle / "callable.bin", tools / "native-runner"
+            PREPARE.assemble_replay(tools, image, build / "assembly.txt", metadata, kernels, binaries)
+            description = json.loads(PREPARE.capture([runner, "--describe-callable", image]))
+            self.assertEqual(len(description["signature"]), 99)
+            self.assertEqual([kernel["id"] for kernel in description["kernels"]], report["kernel_ids"])
+
+            stale = bytearray(image.read_bytes())
+            struct.pack_into("<I", stale, 17556, 1)  # ChipCallable wire_version_ offset.
+            image.write_bytes(stale)
+            PREPARE.save(
+                build / "build.json",
+                {
+                    "platform": "a6",
+                    "kernel_runtime": "percounter",
+                    "runner_sha256": PREPARE.digest(runner.read_bytes()),
+                    "callable_sha256": PREPARE.digest(stale),
+                    "kernels": description["kernels"],
+                },
+            )
+            result = subprocess.run(
+                [
+                    sys.executable, "-I", HERE / "run.py", "--platform", "a6", "--build-dir", build,
+                    "--output", build / "result", "--device", "0", "--a6-query", build / "absent-query",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("unsupported ChipCallable wire version", result.stderr)
+            self.assertFalse((build / "result").exists())
 
 
 if __name__ == "__main__":
