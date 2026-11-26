@@ -403,13 +403,13 @@ static inline __aicore__ bool scheduler_poll_mix_fanin(
         const auto *witness = group.requires_peer_order ? signal.order_ready : signal.finished;
         const uint32_t lane = local->config.self_lane;
         constexpr uint32_t lanes = PLATFORM_CORES_PER_BLOCKDIM;
-        static_assert(lanes == 3);
-        if (scheduler_cluster_load_field(&witness[(lane + 1) % lanes]) == group.generation ||
-            scheduler_cluster_load_field(&witness[(lane + 2) % lanes]) == group.generation) {
-            scheduler_cluster_barrier();
-            group.next_fanin = group.fanin.count;
-            *progress = true;
-            return true;
+        for (uint32_t offset = 1; offset < lanes; ++offset) {
+            if (scheduler_cluster_load_field(&witness[(lane + offset) % lanes]) == group.generation) {
+                scheduler_cluster_barrier();
+                group.next_fanin = group.fanin.count;
+                *progress = true;
+                return true;
+            }
         }
     }
     const auto previous = group.next_fanin;
