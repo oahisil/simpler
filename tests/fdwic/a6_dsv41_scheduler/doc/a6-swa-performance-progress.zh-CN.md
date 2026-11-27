@@ -11,6 +11,17 @@
 
 <a id="swa-perfetto"></a>
 
+## A5 Calendar SWA 泳道下载
+
+采集提交 `951377c0e`，A5 设备 0（32C + 64V），CANN 9.3.0。单卡 SWA 使用 Percounter Calendar（`scheduler_mode=5`），L0 和 L2 均通过数值校验。主机缺少 `task-submit`，运行期间未持有设备队列锁。
+
+| 级别 | 采集结果 | 文件 |
+| --- | --- | --- |
+| L0 | 预热 1 轮，正式 10 轮。AICore 均值 171.730 µs，Device 均值 225.678 µs。泳道展示 Host 和 Device 计时。 | [L0 Perfetto](swimlanes/a5-calendar-951377c0e/a5-swa-L0.perfetto.json.gz) |
+| L2 | 预热 1 轮，正式 1 轮。578 个核执行片段、3,468 条调度事件，无事件丢失或未匹配更新。 | [L2 Perfetto](swimlanes/a5-calendar-951377c0e/a5-swa-L2.perfetto.json.gz) |
+
+两份 `.json.gz` 可在 Perfetto 中打开。原始包包含 L0 逐轮计时和日志、L2 原始记录、依赖图和任务映射。[原始数据包](swimlanes/a5-calendar-951377c0e/a5-swa-raw.tar.gz) · [采集与导出命令](a5-calendar-swa-capture.zh-CN.md)
+
 ## 集成版 SWA 泳道下载
 
 两端均取 rank 0 的第一轮正式运行 `run1`。L1 和 L2 各自单独采集。下载后把 `.json.gz` 拖入 [Perfetto](https://ui.perfetto.dev/)，也可以先解压再打开 JSON。
