@@ -10,7 +10,11 @@
 set -euo pipefail
 
 if [[ $# != 1 || ! $1 =~ ^[0-9]+$ ]]; then
-    echo "Usage: bash test_a6_swa.sh DEVICE" >&2
+    echo "Usage: bash test_a6_swa.sh DEVICE (A6 8C+8V SWA replay)" >&2
+    exit 2
+fi
+if [[ ${SWA_SYNC_BOUND:-0} == 1 ]]; then
+    echo "The 54C+54V sync-bound analysis requires a full-width percounter checkout." >&2
     exit 2
 fi
 device=$1
@@ -30,16 +34,6 @@ cmake -S tools/cann-examples/query -B "$out/query" -G Ninja
 cmake --build "$out/query" --target query
 python -I "$swa/prepare.py" build --platform a6 --pto-isa build/pto-isa \
     --build-dir "$out/case" --jobs 4
-if [[ ${SWA_SYNC_BOUND:-0} == 1 ]]; then
-    python -I "$swa/analysis/t25_ab.py" "$out" --prepare-only "$out"
-    for level in 0 2; do
-        python -I "$swa/run.py" --platform a6 --device "$device" --level "$level" \
-            --a6-query "$out/query/query" --runtime-lib "$out/lib/a6/onboard" \
-            --build-dir "$out/t25-54" --output "$out/L$level" --warmup 1 --rounds 10
-    done
-    python "$swa/analysis/swa_sync_bound.py" "$out/t25-54" "$out/L0" "$out/L2" "$out/model" --time-limit 30
-else
-    python -I "$swa/run.py" --platform a6 --device "$device" \
-        --a6-query "$out/query/query" --runtime-lib "$out/lib/a6/onboard" \
-        --build-dir "$out/case" --output "$out/result" --warmup 1 --rounds 10
-fi
+python -I "$swa/run.py" --platform a6 --device "$device" \
+    --a6-query "$out/query/query" --runtime-lib "$out/lib/a6/onboard" \
+    --build-dir "$out/case" --output "$out/result" --warmup 1 --rounds 10

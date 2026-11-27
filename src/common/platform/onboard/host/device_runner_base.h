@@ -2199,7 +2199,7 @@ protected:
     // instantiation (`new DeviceRunnerBase()`) is a compile error. The
     // public virtual dtor above lets the shared c_api delete through a
     // base pointer safely.
-    DeviceRunnerBase();
+    explicit DeviceRunnerBase(int launch_block_dim_cap = PLATFORM_MAX_BLOCKDIM);
 
     virtual int finalize_impl() = 0;
     // A failed device bind can still leave a process-level SDK reference.
@@ -3062,6 +3062,7 @@ protected:
     // ensure_device_initialized(). Nothing in this codebase calls
     // aclrtSetStreamResLimit, so the limits hold for that stream's lifetime;
     // finalize_common() clears them along with the stream.
+    const int launch_block_dim_cap_;
     int max_block_dim_{0};
     uint32_t max_cube_cores_{0};
     uint32_t max_vector_cores_{0};

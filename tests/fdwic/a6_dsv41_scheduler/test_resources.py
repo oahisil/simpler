@@ -36,7 +36,7 @@ class ResourceCheckTest(unittest.TestCase):
         PREPARE.unpack_fixture(cls.original.parent)
         suffix = ".exe" if os.name == "nt" else ""
         cls.checker = root / f"check-resources{suffix}"
-        adapter = root / f"adapt-plan{suffix}"
+        cls.adapter = root / f"adapt-plan{suffix}"
         flags = [
             os.environ.get("CXX", "g++"),
             "-std=c++17",
@@ -47,7 +47,7 @@ class ResourceCheckTest(unittest.TestCase):
         ]
         if os.name == "nt":
             flags.append("-static")
-        for source, target in (("check_resources.cpp", cls.checker), ("adapt_plan.cpp", adapter)):
+        for source, target in (("check_resources.cpp", cls.checker), ("adapt_plan.cpp", cls.adapter)):
             subprocess.run(
                 [*flags, str(HERE / source), "-o", str(target)],
                 check=True,
@@ -56,7 +56,7 @@ class ResourceCheckTest(unittest.TestCase):
                 timeout=120,
             )
         subprocess.run(
-            [str(adapter), str(cls.original), str(cls.converted)], check=True, capture_output=True, timeout=20
+            [str(cls.adapter), str(cls.original), str(cls.converted)], check=True, capture_output=True, timeout=20
         )
 
     def run_check(self, plan, clusters, vectors):
@@ -86,6 +86,25 @@ class ResourceCheckTest(unittest.TestCase):
         self.assertIn("Task 22: sync_start requires 48 clusters; available 47", result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(self.run_check(self.converted, 48, 1).returncode, 0)
+
+    def test_eight_pairs_keep_all_attention_blocks_and_preserve_the_cube_cohort(self):
+        plan = self.original.parent.parent / "plan-a6-8c8v.bin"
+        converted = subprocess.run(
+            [str(self.adapter), str(self.original), str(plan), "--8c8v"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(converted.returncode, 0, converted.stderr)
+        result = self.run_check(plan, 8, 1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual((report["tasks"], report["executions"], report["minimum_clusters"]), (16, 570, 8))
+        tasks = {task["id"]: task for task in report["task_resources"]}
+        self.assertEqual(tasks[19], {"id": 19, "blocks": 8, "mask": 1, "sync_start": 1, "isolated_waves": 1})
+        self.assertEqual(tasks[22], {"id": 22, "blocks": 48, "mask": 3, "sync_start": 0, "isolated_waves": 6})
+        self.assertIn("Task 19: sync_start requires 8 clusters; available 7", self.run_check(plan, 7, 1).stderr)
 
     def test_original_plan_retains_a5_resource_requirements(self):
         result = self.run_check(self.original, 36, 2)

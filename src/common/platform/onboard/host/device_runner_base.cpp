@@ -396,7 +396,8 @@ DeviceRunnerBase::launch_execution(std::unique_ptr<PreparedExecution> prepared, 
     return outcome;
 }
 
-DeviceRunnerBase::DeviceRunnerBase() {
+DeviceRunnerBase::DeviceRunnerBase(int launch_block_dim_cap)
+    : launch_block_dim_cap_(std::min(launch_block_dim_cap, PLATFORM_MAX_BLOCKDIM)) {
     heap_pool_ =
         std::make_shared<ScratchPool>(&arena_alloc_trampoline, &arena_free_trampoline, this, [this](void *raw) {
             on_heap_released(raw);
@@ -2399,9 +2400,9 @@ int DeviceRunnerBase::query_max_block_dim(rtStream_t stream, uint32_t *out_cube,
         int from_stream = static_cast<int>(
             std::min(cube_limit / PLATFORM_AIC_CORES_PER_BLOCKDIM, vector_limit / PLATFORM_AIV_CORES_PER_BLOCKDIM)
         );
-        return std::min(from_stream, PLATFORM_MAX_BLOCKDIM);
+        return std::min(from_stream, launch_block_dim_cap_);
     }
-    return PLATFORM_MAX_BLOCKDIM;
+    return launch_block_dim_cap_;
 }
 
 void DeviceRunnerBase::log_run_failure(const PreparedExecution &prepared, int rc) const {

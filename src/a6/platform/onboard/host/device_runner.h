@@ -85,7 +85,7 @@ public:
     bool supports_caller_swimlane() const override { return SIMPLER_DFX != 0; }
     bool supports_caller_args_dump() const override { return SIMPLER_DFX != 0; }
 
-    DeviceRunner() = default;
+    DeviceRunner() : DeviceRunnerBase(PLATFORM_ONBOARD_LAUNCH_BLOCKDIM) {}
     ~DeviceRunner();
     std::thread create_thread(std::function<void()> fn) override;
 

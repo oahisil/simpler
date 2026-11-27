@@ -35,6 +35,8 @@
  * This is the fundamental platform capacity constraint.
  */
 constexpr int PLATFORM_MAX_BLOCKDIM = 54;
+// Onboard launches use at most eight pairs, with full-width runtime tables.
+constexpr int PLATFORM_ONBOARD_LAUNCH_BLOCKDIM = 8;
 
 /**
  * Core composition per block dimension
