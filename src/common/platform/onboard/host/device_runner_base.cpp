@@ -36,6 +36,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -4132,8 +4133,19 @@ int DeviceRunnerBase::resolve_block_dim() {
         );
         return -1;
     }
-    LOG_INFO("block_dim resolved to %d (cube=%u, vector=%u)", max_block_dim_, max_cube_cores_, max_vector_cores_);
-    return max_block_dim_;
+    int block_dim = max_block_dim_;
+#ifdef SIMPLER_PLATFORM_A6
+    if (const char *value = std::getenv("SIMPLER_A6_CORE_PAIRS")) {
+        const char *end = value + std::strlen(value);
+        const auto parsed = std::from_chars(value, end, block_dim);
+        if (parsed.ec != std::errc{} || parsed.ptr != end || block_dim < 1 || block_dim > max_block_dim_) {
+            LOG_ERROR("SIMPLER_A6_CORE_PAIRS must be an integer in [1, %d], got '%s'", max_block_dim_, value);
+            return -1;
+        }
+    }
+#endif
+    LOG_INFO("block_dim resolved to %d (cube=%u, vector=%u)", block_dim, max_cube_cores_, max_vector_cores_);
+    return block_dim;
 }
 
 int DeviceRunnerBase::prepare_launch_shape(Runtime &runtime, const CallConfig &config) {
@@ -4156,7 +4168,7 @@ int DeviceRunnerBase::prepare_launch_shape(Runtime &runtime, const CallConfig &c
     runtime.dev.chip_swimlane_level = static_cast<uint32_t>(config.enable_chip_swimlane);
     runtime.dev.dump_args_level = static_cast<uint32_t>(config.enable_dump_args);
 
-    // First `block_dim` cores are AIC; remaining ~2/3 are AIV. The rule is host
+    // First `block_dim` cores are AIC; the remaining cores are AIV. The rule is host
     // state: every consumer of it runs on the host and needs it before any core
     // has reported. `RuntimeSharedState::workers` is not written here — it sits outside the
     // per-run uploaded prefix, the device owns every word of it once the block

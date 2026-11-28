@@ -431,6 +431,13 @@ inline bool publish_calendar_state(
         return false;
     }
     constexpr uint64_t alignment = 128;
+    const auto calendar_header = calendar.load<CalendarRangeHeader>(0);
+    const size_t requested = static_cast<size_t>(calendar_header.notify_slots_count) + 1;
+    uint32_t gm_slots = 0;
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        gm_slots = calendar.allocate<CalendarGmCounter>(requested);
+        if (gm_slots == 0) return false;
+    }
     if (layout.total_size > SIZE_MAX - alignment - calendar.bytes.size()) return false;
     const uint64_t calendar_offset = (layout.total_size + alignment - 1) & ~(alignment - 1);
     const uint64_t calendar_end = calendar_offset + calendar.bytes.size();
@@ -442,7 +449,6 @@ inline bool publish_calendar_state(
         if (dump.layout.total_size > SIZE_MAX - dump_offset) return false;
         allocation_size = dump_offset + dump.layout.total_size;
     }
-    const auto calendar_header = calendar.load<CalendarRangeHeader>(0);
     void *device_state = nullptr;
     void *host_base = nullptr;
     if (api->acquire_scheduler_state_storage(
@@ -457,16 +463,24 @@ inline bool publish_calendar_state(
     SchedulerDoneNotifications notifications{};
     // The last SET slot is a run-wide lifecycle word. Keep it out of the
     // calendar slot table: lanes sample the previous generation before discovery.
-    const size_t requested = static_cast<size_t>(calendar_header.notify_slots_count) + 1;
-    const int lease_rc =
-        api->acquire_scheduler_notifications(SchedulerNotificationPurpose::CALENDAR_COUNTER, requested, &notifications);
-    if (lease_rc != 0 || notifications.addresses.size() != requested || notifications.owner == nullptr ||
-        a5_soc_sram_add_address(notifications.addresses.back()) == 0) {
-        LOG_ERROR(
-            "A5 calendar: complete SoC SRAM lease required (requested=%zu, received=%zu, status=%d)", requested,
-            notifications.addresses.size(), lease_rc
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        const uint64_t first = device_base + calendar_offset + gm_slots;
+        if (calendar_add_command(first) == 0) return false;
+        notifications.addresses.reserve(requested);
+        for (size_t i = 0; i < requested; ++i)
+            notifications.addresses.push_back(first + i * sizeof(CalendarGmCounter));
+    } else {
+        const int lease_rc = api->acquire_scheduler_notifications(
+            SchedulerNotificationPurpose::CALENDAR_COUNTER, requested, &notifications
         );
-        return false;
+        if (lease_rc != 0 || notifications.addresses.size() != requested || notifications.owner == nullptr ||
+            calendar_add_command(notifications.addresses.back()) == 0) {
+            LOG_ERROR(
+                "A5 calendar: complete SoC SRAM lease required (requested=%zu, received=%zu, status=%d)", requested,
+                notifications.addresses.size(), lease_rc
+            );
+            return false;
+        }
     }
     const uint64_t lifecycle_notify = notifications.addresses.back();
     notifications.addresses.pop_back();

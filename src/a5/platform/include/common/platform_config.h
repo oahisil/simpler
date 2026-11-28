@@ -44,6 +44,7 @@ constexpr int PLATFORM_CORES_PER_BLOCKDIM = 3;
 constexpr int PLATFORM_AIC_CORES_PER_BLOCKDIM = 1;
 constexpr int PLATFORM_AIV_CORES_PER_BLOCKDIM = 2;
 constexpr uint32_t PLATFORM_SSBUF_SIZE = 3 * 1024;
+inline constexpr bool PLATFORM_CALENDAR_COUNTERS_IN_GM = false;
 
 /**
  * Maximum AICPU scheduling threads

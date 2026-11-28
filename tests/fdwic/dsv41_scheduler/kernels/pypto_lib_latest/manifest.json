@@ -1,0 +1,463 @@
+{
+  "schema": 1,
+  "origin": "hw-native-sys/pypto-lib dev/hbg@4cb74422616359b3f95c598b1f9cdd31cf4e4173 aicpu_orchestration_entry",
+  "platform": "a5",
+  "entry_signature": [
+    1,
+    1,
+    1,
+    1,
+    3,
+    3,
+    3,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    3,
+    3,
+    1,
+    1,
+    3,
+    3,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    3,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "kernels": [
+    {
+      "func_id": 6,
+      "name": "hc_collapse_norm",
+      "source": "vendor/aiv/hc_collapse_norm.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "363a497f195d984816c1d527319d8d47064826448ef3b7365515d2f00312c4b4",
+      "code_name": "hc_collapse_norm",
+      "vf_llvm": [
+        "vendor/vf/hc_collapse_norm/__pypto_vf_hc_collapse_norm_0.ll",
+        "vendor/vf/hc_collapse_norm/__pypto_vf_hc_collapse_norm_1.ll",
+        "vendor/vf/hc_collapse_norm/__pypto_vf_hc_collapse_norm_2.ll",
+        "vendor/vf/hc_collapse_norm/__pypto_vf_hc_collapse_norm_3.ll",
+        "vendor/vf/hc_collapse_norm/__pypto_vf_hc_collapse_norm_4.ll",
+        "vendor/vf/hc_collapse_norm/__pypto_vf_hc_collapse_norm_5.ll"
+      ]
+    },
+    {
+      "func_id": 7,
+      "name": "zero_bf16_padding",
+      "source": "vendor/aiv/zero_bf16_padding.cpp",
+      "core_type": "aiv",
+      "signature": [
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "011f543d810e1a0f6efc820dab832fe542c903be7ad902b83d95f5407367f709",
+      "code_name": "zero_bf16_padding"
+    },
+    {
+      "func_id": 8,
+      "name": "qkv_quant",
+      "source": "vendor/aiv/qkv_quant.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        3,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "295434246a19096c328268382e004851ff8ef28efa34bd0ab4b4d3f478b6323f",
+      "code_name": "qkv_quant",
+      "vf_llvm": [
+        "vendor/vf/qkv_quant/__pypto_vf_qkv_quant_0.ll"
+      ]
+    },
+    {
+      "func_id": 9,
+      "name": "_proj_q_a",
+      "source": "vendor/external/proj_q_a.cpp",
+      "core_type": "aic",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "deacaec85a27b0a5a2fc2ba07f42d85d8dc922ef8a866114d8e84ca604b411b1"
+    },
+    {
+      "func_id": 10,
+      "name": "q_norm_quant",
+      "source": "vendor/external/q_norm_quant.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        1,
+        3,
+        3,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "5d361bec6257dfec9b4b4391c29c1e55b6335635fee63da2105c62d856edc2a2"
+    },
+    {
+      "func_id": 11,
+      "name": "_proj_q_b_aic",
+      "source": "vendor/external/proj_q_b.cpp",
+      "core_type": "aic",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        3,
+        1,
+        1
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "9a2edc433f89182af1cdc4bd59e0ba5be6ccd92a6398ea41d0b68afe0c40a9ad"
+    },
+    {
+      "func_id": 12,
+      "name": "_proj_q_b_aiv",
+      "source": "vendor/external/proj_q_b.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        3,
+        1,
+        1
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "9a2edc433f89182af1cdc4bd59e0ba5be6ccd92a6398ea41d0b68afe0c40a9ad"
+    },
+    {
+      "func_id": 13,
+      "name": "_proj_kv",
+      "source": "vendor/external/proj_kv.cpp",
+      "core_type": "aic",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "46f80d86af1cd8a1de4b67df8ae78f45df9eaa914b4a3c7c86fb72910ccefce3"
+    },
+    {
+      "func_id": 14,
+      "name": "norm_rope_publish",
+      "source": "vendor/aiv/norm_rope_publish.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "52ad5cc46565b68edf49684807e9ee1a43075a384ce793ba24cf540ff958fca8",
+      "code_name": "norm_rope_publish",
+      "vf_llvm": [
+        "vendor/vf/norm_rope_publish/__pypto_vf_norm_rope_publish_0.ll",
+        "vendor/vf/norm_rope_publish/__pypto_vf_norm_rope_publish_1.ll",
+        "vendor/vf/norm_rope_publish/__pypto_vf_norm_rope_publish_2.ll",
+        "vendor/vf/norm_rope_publish/__pypto_vf_norm_rope_publish_3.ll",
+        "vendor/vf/norm_rope_publish/__pypto_vf_norm_rope_publish_4.ll",
+        "vendor/vf/norm_rope_publish/__pypto_vf_norm_rope_publish_5.ll",
+        "vendor/vf/norm_rope_publish/__pypto_vf_norm_rope_publish_6.ll",
+        "vendor/vf/norm_rope_publish/__pypto_vf_norm_rope_publish_7.ll"
+      ]
+    },
+    {
+      "func_id": 15,
+      "name": "sparse_gather_reset",
+      "source": "vendor/aiv/sparse_gather_reset.cpp",
+      "core_type": "aiv",
+      "signature": [
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "052812d18b0054a575d26f47e5395a6cb37869714fdc9803993cdbab2bb7f9cb",
+      "code_name": "sparse_gather_reset"
+    },
+    {
+      "func_id": 16,
+      "name": "_gather_sparse_vf_rows_aic",
+      "source": "vendor/external/sparse_gather_vf.cpp",
+      "core_type": "aic",
+      "signature": [
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "79271f034ca72c574fde694456e896c33741f90deba0890b2af60c6a18088e99"
+    },
+    {
+      "func_id": 17,
+      "name": "_gather_sparse_vf_rows_aiv",
+      "source": "vendor/external/sparse_gather_vf.cpp",
+      "core_type": "aiv",
+      "signature": [
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "79271f034ca72c574fde694456e896c33741f90deba0890b2af60c6a18088e99"
+    },
+    {
+      "func_id": 18,
+      "name": "hc_rms",
+      "source": "vendor/aiv/hc_rms.cpp",
+      "core_type": "aiv",
+      "signature": [
+        3,
+        1
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "2e194a140d1212e1a9af9a0a7547d83b71354c152e7d94f38c48877443e62cb2",
+      "code_name": "hc_rms"
+    },
+    {
+      "func_id": 19,
+      "name": "hc_linear",
+      "source": "vendor/aic/hc_linear.cpp",
+      "core_type": "aic",
+      "signature": [
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "4d77f3648c8f9a12d7d60705c0f96b533dc8766d8450c474d2674e48df5814d9",
+      "code_name": "hc_linear"
+    },
+    {
+      "func_id": 20,
+      "name": "mhc_sinkhorn",
+      "source": "vendor/aiv/mhc_sinkhorn.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        3,
+        3,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "d74cc57a8de661f1e40f1020ec9c11d5b94eef89af7a6b26c8300e24f171ab99",
+      "code_name": "mhc_sinkhorn",
+      "vf_llvm": [
+        "vendor/vf/mhc_sinkhorn/__pypto_vf_mhc_sinkhorn_0.ll"
+      ]
+    },
+    {
+      "func_id": 21,
+      "name": "_quant_o_vf",
+      "source": "vendor/external/o_quant_vf.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        1,
+        1,
+        3,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "42df4bc2388e8fdef795dd424caaf8f1baa9ae01541376c9f8640dc0f9c459f3"
+    },
+    {
+      "func_id": 22,
+      "name": "_o_proj_a_aic",
+      "source": "vendor/external/o_proj_a.cpp",
+      "core_type": "aic",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        3,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "fcb6958ddbc8886ca76b2e9d616b017c05c5c18527a337a7d114a711995f20b7"
+    },
+    {
+      "func_id": 23,
+      "name": "_o_proj_a_aiv",
+      "source": "vendor/external/o_proj_a.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        3,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "fcb6958ddbc8886ca76b2e9d616b017c05c5c18527a337a7d114a711995f20b7"
+    },
+    {
+      "func_id": 24,
+      "name": "_o_proj_b_hc_post_aic",
+      "source": "vendor/external/o_proj_b_hc_post.cpp",
+      "core_type": "aic",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "c11ed612f7bf05e222fd4f62b38efd0f0dd7fe0fe96c19b09497db7314476a1c"
+    },
+    {
+      "func_id": 25,
+      "name": "_o_proj_b_hc_post_aiv",
+      "source": "vendor/external/o_proj_b_hc_post.cpp",
+      "core_type": "aiv",
+      "signature": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        3
+      ],
+      "include_dirs": [
+        "vendor/external"
+      ],
+      "source_sha256": "c11ed612f7bf05e222fd4f62b38efd0f0dd7fe0fe96c19b09497db7314476a1c"
+    }
+  ],
+  "orchestrator_name": "_l2_decode_fwd"
+}

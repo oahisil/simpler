@@ -11,6 +11,7 @@
 
 #include "profiling.h"
 #include "common/host_api.h"
+#include "host/platform_compile_info.h"
 
 #include <algorithm>
 #include <cstring>
@@ -281,7 +282,8 @@ bool export_profile(const ProfileOwner &owner) {
         });
         if (!first_stream) streams << ',';
         first_stream = false;
-        streams << "{\"platform\":\"a5\",\"producer\":\"aicore\",\"scheduler_id\":" << worker
+        const auto *profile_platform = PLATFORM_CALENDAR_COUNTERS_IN_GM ? get_platform() : "a5";
+        streams << "{\"platform\":\"" << profile_platform << "\",\"producer\":\"aicore\",\"scheduler_id\":" << worker
                 << ",\"worker_id\":" << worker << ",\"core_type\":\"" << (header.core_type == 0 ? "aic" : "aiv")
                 << "\",\"physical_core_id\":" << header.physical_core_id
                 << ",\"cluster_index\":" << header.cluster_index << ",\"cluster_lane\":" << header.cluster_lane

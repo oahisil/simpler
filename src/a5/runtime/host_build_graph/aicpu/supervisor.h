@@ -64,14 +64,26 @@ inline const uint64_t *percounter_calendar_slots(const CalendarRangeHeader &cale
 }
 
 inline uint32_t percounter_read_slot(uint64_t address) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        const auto *word = reinterpret_cast<const uint64_t *>(address);
+        cache_invalidate_range(word, sizeof(*word));
+        return static_cast<uint32_t>(__atomic_load_n(word, __ATOMIC_ACQUIRE));
+    }
     return __atomic_load_n(reinterpret_cast<const uint32_t *>(address), __ATOMIC_RELAXED);
 }
 
 inline void percounter_reset_calendar_notifications(const CalendarRangeHeader &calendar) {
     const auto *slots = percounter_calendar_slots(calendar);
     cache_invalidate_range(slots, static_cast<size_t>(calendar.notify_slots_count) * sizeof(*slots));
-    for (uint32_t i = 0; i < calendar.notify_slots_count; ++i)
-        *reinterpret_cast<volatile uint32_t *>(slots[i]) = 0;
+    for (uint32_t i = 0; i < calendar.notify_slots_count; ++i) {
+        if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+            auto *word = reinterpret_cast<uint64_t *>(slots[i]);
+            __atomic_store_n(word, uint64_t{0}, __ATOMIC_RELEASE);
+            cache_flush_range(word, sizeof(*word));
+        } else {
+            *reinterpret_cast<volatile uint32_t *>(slots[i]) = 0;
+        }
+    }
 }
 
 // Before START, these logical entries are private to the binder. Discovery

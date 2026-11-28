@@ -141,7 +141,7 @@ int32_t AicoreLifecycle::pre_handshake_init(Runtime *runtime, int32_t aicpu_thre
         reinterpret_cast<volatile uint32_t *>(runtime->dev.scheduler_bootstrap.lifecycle_notify_address);
     rejected_exit_ = reinterpret_cast<uint32_t *>(runtime->dev.scheduler_bootstrap.rejected_exit_address);
     if (lifecycle_notify_ != nullptr) {
-        const uint32_t prior = __atomic_load_n(lifecycle_notify_, __ATOMIC_RELAXED);
+        const uint32_t prior = read_aicore_lifecycle_word(lifecycle_notify_);
         lifecycle_start_ = (prior + 2U) & AICORE_LIFECYCLE_GENERATION_MASK;
     }
     // The descriptor's gate tail is device-owned and is not copied from the host.

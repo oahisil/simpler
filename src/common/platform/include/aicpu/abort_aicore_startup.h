@@ -103,7 +103,7 @@ inline int32_t abort_aicore_startup(Runtime *runtime, uint64_t regs_base, uint64
 #ifdef SIMPLER_HAS_AICORE_SOC_SRAM_LIFECYCLE
     const auto lifecycle = simpler::startup_abort::calendar_lifecycle(runtime->dev, 0);
     if (lifecycle.notify != nullptr) {
-        const uint32_t previous = __atomic_load_n(lifecycle.notify, __ATOMIC_RELAXED);
+        const uint32_t previous = read_aicore_lifecycle_word(lifecycle.notify);
         const uint32_t exit = ((previous + 2U) & AICORE_LIFECYCLE_GENERATION_MASK) | AICORE_LIFECYCLE_EXIT_BIT;
         bool has_target[PLATFORM_MAX_CORES]{};
         for (size_t i = 0; i < count; ++i) {

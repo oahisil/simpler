@@ -46,9 +46,10 @@ struct CalendarPlan {
 
 namespace calendar_detail {
 
-constexpr uint32_t lane_count = 3;
+constexpr uint32_t lane_count = PLATFORM_CORES_PER_BLOCKDIM;
+constexpr uint32_t vector_lanes = PLATFORM_AIV_CORES_PER_BLOCKDIM;
 constexpr uint32_t mask_count = 1U << lane_count;
-static_assert(lane_count == PLATFORM_CORES_PER_BLOCKDIM);
+static_assert(vector_lanes == 1 || vector_lanes == 2);
 
 struct TaskShape {
     uint32_t first_row{0};
@@ -93,7 +94,7 @@ inline bool describe(
             task.subtask_count != __builtin_popcount(s.role_mask))
             return false;
         if (task.sync_start) {
-            const uint32_t limit = placement == TaskPlacement::AIV ? 2U * clusters : clusters;
+            const uint32_t limit = placement == TaskPlacement::AIV ? vector_lanes * clusters : clusters;
             if (task.block_num < 2 || static_cast<uint32_t>(task.block_num) > limit) return false;
         }
         s.role_count = static_cast<uint32_t>(task.subtask_count);
@@ -126,15 +127,15 @@ inline bool describe(
 }
 
 inline uint32_t worker_index(uint32_t clusters, uint32_t cluster, uint32_t lane) {
-    return lane == 0 ? cluster : clusters + 2U * cluster + lane - 1U;
+    return lane == 0 ? cluster : clusters + vector_lanes * cluster + lane - 1U;
 }
 
 inline uint32_t worker_lane(uint32_t clusters, uint32_t worker) {
-    return worker < clusters ? 0 : 1U + (worker - clusters) % 2U;
+    return worker < clusters ? 0 : 1U + (worker - clusters) % vector_lanes;
 }
 
 inline uint32_t worker_cluster(uint32_t clusters, uint32_t worker) {
-    return worker < clusters ? worker : (worker - clusters) / 2U;
+    return worker < clusters ? worker : (worker - clusters) / vector_lanes;
 }
 
 inline uint32_t logical_row(const TaskShape &s, uint32_t block, uint32_t role) {
@@ -162,7 +163,7 @@ struct EarlierPlacement {
 
 class PlacementChoices {
     using Placements = std::set<Placement, EarlierPlacement>;
-    static constexpr size_t max_width = 2U * PLATFORM_MAX_BLOCKDIM;
+    static constexpr size_t max_width = vector_lanes * PLATFORM_MAX_BLOCKDIM;
 
 public:
     PlacementChoices(const Shape &shape, uint32_t clusters) :
@@ -173,7 +174,7 @@ public:
             for (uint32_t cluster = 0; cluster < clusters_; ++cluster) {
                 add(mask, {cluster, mask, 0});
                 // A standalone Vector can use either physical Vector lane.
-                if (mask == 2U || mask == 4U) add(mask, {cluster, mask ^ 6U, 0});
+                if (vector_lanes == 2 && (mask == 2U || mask == 4U)) add(mask, {cluster, mask ^ 6U, 0});
             }
         }
     }
@@ -186,7 +187,7 @@ public:
         for (uint32_t mask = 1; mask < mask_count; ++mask) {
             if (ordered_[mask].empty()) continue;
             refresh(mask, cluster, mask, changed, free_at);
-            if (mask == 2U || mask == 4U) refresh(mask, cluster, mask ^ 6U, changed, free_at);
+            if (vector_lanes == 2 && (mask == 2U || mask == 4U)) refresh(mask, cluster, mask ^ 6U, changed, free_at);
         }
     }
 
@@ -196,7 +197,7 @@ private:
     std::array<std::array<Placements::iterator, max_width>, mask_count> positions_;
 
     static size_t position(uint32_t cluster, uint32_t logical, uint32_t physical) {
-        return 2U * cluster + (logical != physical ? 1U : 0U);
+        return vector_lanes * cluster + (logical != physical ? 1U : 0U);
     }
 
     void add(uint32_t mask, const Placement &choice) {
@@ -450,7 +451,8 @@ inline bool calendar_placement_costs(
             fanins += !tasks[task.fanin_ids[i]].inline_completed;
         const bool summarizes =
             fanins >= 2 && !task.is_mix && !task.sync_start && task.block_num >= 2 &&
-            fanins <= CALENDAR_FANIN_TASKS_PER_LANE * std::min(static_cast<uint32_t>(task.block_num), 2U * clusters);
+            fanins <= CALENDAR_FANIN_TASKS_PER_LANE *
+                         std::min(static_cast<uint32_t>(task.block_num), calendar_detail::vector_lanes * clusters);
         const uint64_t probes = summarizes ? (fanins + task.block_num - 1) / task.block_num : fanins;
         if (overhead.row_cycles > UINT64_MAX - overhead.observation_cycles ||
             (probes != 0 &&
@@ -503,7 +505,7 @@ inline bool build_static_calendar(
             uint64_t duration = s.longest_output_latency;
             if (ranking == CalendarPriority::WORK_AND_WAIT && s.role_count != 0) {
                 const auto &task = tasks[id];
-                const uint32_t capacity = (s.role_mask == 2U || s.role_mask == 4U) ? 2U * cluster_count : cluster_count;
+                const uint32_t capacity = (s.role_mask == 2U || s.role_mask == 4U) ? vector_lanes * cluster_count : cluster_count;
                 for (uint32_t role = 0; role < s.role_count; ++role) {
                     uint64_t work = 0;
                     for (uint32_t block = 0; block < static_cast<uint32_t>(task.block_num); ++block) {

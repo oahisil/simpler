@@ -137,6 +137,7 @@ void platform_signal_aicore_exit(uint64_t reg_addr);
 uint64_t platform_aicore_exit_deadline();
 
 #define SIMPLER_HAS_AICORE_SOC_SRAM_LIFECYCLE 1
+inline uint32_t read_aicore_lifecycle_word(volatile uint32_t *word) { return __atomic_load_n(word, __ATOMIC_RELAXED); }
 void publish_aicore_lifecycle_word(volatile uint32_t *word, uint32_t value);
 
 // Quiesce a core whose COND the caller has already observed as EXITED: dispatch

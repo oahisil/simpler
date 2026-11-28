@@ -37,6 +37,11 @@ inline constexpr uint32_t CALENDAR_NO_JOIN = UINT32_MAX;
 inline constexpr uint32_t CALENDAR_NO_INPUT_OWNER = UINT32_MAX;
 inline constexpr uint32_t CALENDAR_COUNT_MASK = 0x00ff'ffff;
 
+// A GM slot owns a complete atomic sector, including for fused credits and defer bits.
+struct alignas(128) CalendarGmCounter {
+    uint64_t value;
+};
+
 // Offsets are relative to the start of this immutable image in GM.
 struct CalendarHeader {
     uint32_t worker_count;

@@ -13,6 +13,7 @@
 #include <cstdint>
 
 #include "scheduler/profiling_memory.h"
+#include "scheduler/gm.h"
 
 // The 32-bit SET/read, ADD and OR aliases address one SoC SRAM word.
 // ADD and OR update that word atomically without returning its old value.
@@ -20,10 +21,15 @@ inline constexpr uint64_t SOC_SRAM_ADD_OFFSET = 8;
 inline constexpr uint64_t SOC_SRAM_OR_OFFSET = 16;
 
 inline __aicore__ uint64_t percounter_soc_sram_add_address(uint64_t read_address) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) return read_address;
     return read_address == 0 ? 0 : read_address + SOC_SRAM_ADD_OFFSET;
 }
 
 inline __aicore__ uint32_t percounter_soc_sram_read(__gm__ volatile uint32_t &word) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        auto &wide = *reinterpret_cast<__gm__ volatile uint64_t *>(&word);
+        return static_cast<uint32_t>(percounter_gm_fetch_add(wide, 0, __ATOMIC_ACQ_REL));
+    }
     return simpler::percounter::percounter_scalar_soc_sram_read(
         reinterpret_cast<uint64_t>(&word), [&word]() __aicore__ {
 #if defined(__CCE_AICORE__)
@@ -37,6 +43,11 @@ inline __aicore__ uint32_t percounter_soc_sram_read(__gm__ volatile uint32_t &wo
 
 // The ADD alias interprets 1 as one increment command.
 inline __aicore__ void percounter_soc_sram_increment(uint64_t add_address) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        auto &word = *reinterpret_cast<__gm__ volatile uint64_t *>(add_address);
+        (void)percounter_gm_fetch_add(word, 1, __ATOMIC_ACQ_REL);
+        return;
+    }
     using namespace simpler::percounter;
     percounter_scalar_soc_sram_issue(ProfilePhase::SocSramAddIssue, add_address, 1, [=]() __aicore__ {
 #if defined(__CCE_AICORE__)
@@ -49,6 +60,16 @@ inline __aicore__ void percounter_soc_sram_increment(uint64_t add_address) {
 }
 
 inline __aicore__ void percounter_soc_sram_or(uint64_t read_address, uint32_t bits) {
+    if constexpr (PLATFORM_CALENDAR_COUNTERS_IN_GM) {
+        auto &word = *reinterpret_cast<__gm__ volatile uint64_t *>(read_address);
+        auto observed = percounter_gm_fetch_add(word, 0, __ATOMIC_ACQ_REL);
+        while ((observed & bits) != bits) {
+            const auto previous = percounter_gm_compare_exchange(word, observed, observed | bits);
+            if (previous == observed) break;
+            observed = previous;
+        }
+        return;
+    }
     using namespace simpler::percounter;
     const uint64_t or_address = read_address + SOC_SRAM_OR_OFFSET;
     percounter_scalar_soc_sram_issue(ProfilePhase::SocSramOrIssue, or_address, bits, [=]() __aicore__ {
